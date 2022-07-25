@@ -19,7 +19,7 @@ const express = require('express');
 const app = express();
 
 // General Parameters for express
-const port = process.env.PORT || 8001;
+const port = process.env.PORT || 8002;
 
 admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
