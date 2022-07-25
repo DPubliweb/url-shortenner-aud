@@ -1,5 +1,5 @@
 const admin = require('firebase-admin');
-const serviceAccount = require('workspace/secure/urlshortenner.json');
+const serviceAccount = require('./secure/urlshortenner.json');
 require('dotenv').config();
 const path = require('path');
 const fs = require('fs');
