@@ -113,11 +113,13 @@ app.post('/upload-file', async (req, res) => {
               });
               rowIndex++;
             });
-            fs.write(__dirname + `/uploads/parsed_${xlsxFile.name}`, function (err, stats) {
+            wb.write(__dirname + `/uploads/parsed_${xlsxFile.name}`, function (err, stats) {
               if (err) {
                 console.error(err);
               } else {
-                res.download(__dirname + `/uploads/parsed_${xlsxFile.name}`, `parsed_${xlsxFile.name}`);
+                const workBook = XLSX.readFile(__dirname + `/uploads/parsed_${xlsxFile.name}`);
+                XLSX.writeFile(workBook, outputFilename, { bookType: "csv" });
+                res.download(__dirname + `/uploads/parsed_${workBook.name}`, `parsed_${workBook.name}`);
               }
             });
           }
