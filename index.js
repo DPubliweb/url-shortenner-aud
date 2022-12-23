@@ -117,9 +117,8 @@ app.post('/upload-file', async (req, res) => {
               if (err) {
                 console.error(err);
               } else {
-                const workBook = XLSX.readFile(__dirname + `/uploads/parsed_${xlsxFile.name}`);
-                XLSX.writeFile(workBook, outputFilename, { bookType: "csv" });
-                res.download(__dirname + `/uploads/parsed_${workBook.name}`, `parsed_${workBook.name}`);
+                
+                res.download(__dirname + `/uploads/parsed_${xlsxFile.name}`, `parsed_${xlsxFile.name}`);
               }
             });
           }
