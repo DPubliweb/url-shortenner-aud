@@ -88,7 +88,7 @@ app.post('/upload-file', async (req, res) => {
                     newRow[i] = 'x'
                   }
                 }
-                newRow[12] = `https://aud.vc/${docId}`;
+                newRow[4] = `https://aud.vc/${docId}`;
                 const object = {};
                 newRow.forEach((col, index) => {
                   object[cols[index]] = col || '';
