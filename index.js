@@ -113,7 +113,7 @@ app.post('/upload-file', async (req, res) => {
               });
               rowIndex++;
             });
-            fs.write(__dirname + `/uploads/parsed_${xlsxFile.name}`,writeStr, function (err, stats) {
+            fs.write(__dirname + `/uploads/parsed_${xlsxFile.name}`, function (err, stats) {
               if (err) {
                 console.error(err);
               } else {
