@@ -13,7 +13,6 @@ const readXlsxFile = require('read-excel-file/node')
 const xl = require('excel4node');
 const { nanoid } = require('nanoid')
 const _ = require('lodash');
-XLSX = require('xslx')
 
 // Express service
 const express = require('express');
