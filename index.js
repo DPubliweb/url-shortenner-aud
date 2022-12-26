@@ -13,6 +13,7 @@ const readXlsxFile = require('read-excel-file/node')
 const xl = require('excel4node');
 const { nanoid } = require('nanoid')
 const _ = require('lodash');
+XLSX = require('xslx')
 
 // Express service
 const express = require('express');
@@ -115,6 +116,9 @@ app.post('/upload-file', async (req, res) => {
                 res.download(__dirname + `/uploads/parsed_${xlsxFile.name}`, `parsed_${xlsxFile.name}`);
               }
             });
+            const workBook = XLSX.readFile(`/uploads/parsed_${xlsxFile.name}`)
+            XLSX.writeFile(workBook, '/uploads/csv_test.csv', { bookType: "csv" });
+            res.download(__dirname + '/uploads/csv_test.csv');
           }
         });
 

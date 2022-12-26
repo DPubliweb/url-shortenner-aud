@@ -5,8 +5,21 @@
 var n = "xlsx";
 var X = require('../');
 try { X = require('../xlsx.flow'); } catch(e) {}
-require('exit-on-epipe');
-var fs = require('fs'), program = require('commander');
+try { require('exit-on-epipe'); } catch(e) {}
+var fs = require('fs'), program;
+try { program = require('commander'); } catch(e) {
+	[
+		"The `xlsx` command line tool is deprecated in favor of `xlsx-cli`.",
+		"",
+		"For new versions of node, we recommend using `npx`:",
+		"    $ npx xlsx-cli --help",
+		"",
+		"For older versions of node, explicitly install `xlsx-cli` globally:",
+		"    $ npm i -g xlsx-cli",
+		"    $ xlsx-cli --help"
+	].forEach(function(m) { console.error(m); });
+	process.exit(1);
+}
 program
 	.version(X.version)
 	.usage('[options] <file> [sheetname]')
@@ -30,6 +43,8 @@ program
 	.option('-i, --xla',  'emit XLA to <sheetname> or <file>.xla')
 	.option('-6, --xlml', 'emit SSML to <sheetname> or <file>.xls (2003 XML)')
 	.option('-T, --fods', 'emit FODS to <sheetname> or <file>.fods (Flat ODS)')
+	.option('--wk3',      'emit WK3  to <sheetname> or <file>.txt (Lotus WK3)')
+	.option('--numbers',  'emit NUMBERS to <sheetname> or <file>.numbers')
 
 	.option('-S, --formulae', 'emit list of values and formulae')
 	.option('-j, --json',     'emit formatted JSON (all fields text)')
@@ -43,6 +58,7 @@ program
 	.option('-E, --eth',  'emit ETH  to <sheetname> or <file>.eth (Ethercalc)')
 	.option('-t, --txt',  'emit TXT  to <sheetname> or <file>.txt (UTF-8 TSV)')
 	.option('-r, --rtf',  'emit RTF  to <sheetname> or <file>.txt (Table RTF)')
+	.option('--wk1',      'emit WK1  to <sheetname> or <file>.txt (Lotus WK1)')
 	.option('-z, --dump', 'dump internal representation as JSON')
 	.option('--props',    'dump workbook properties as CSV')
 
@@ -75,8 +91,10 @@ var workbook_formats = [
 	['xls',     'xls',  'xls'],
 	['xla',     'xla',  'xla'],
 	['biff5', 'biff5',  'xls'],
+	['numbers', 'numbers', 'numbers'],
 	['ods',     'ods',  'ods'],
-	['fods',   'fods', 'fods']
+	['fods',   'fods', 'fods'],
+	['wk3',     'wk3',  'wk3']
 ];
 var wb_formats_2 = [
 	['xlml',   'xlml', 'xls']
@@ -113,6 +131,7 @@ function wb_fmt() {
 	seen = true;
 	opts.cellFormula = true;
 	opts.cellNF = true;
+	opts.xlfn = true;
 	if(program.output) sheetname = program.output;
 }
 function isfmt(m/*:string*/)/*:boolean*/ {
@@ -137,6 +156,7 @@ if(program.all) {
 	opts.cellStyles = true;
 	opts.sheetStubs = true;
 	opts.cellDates = true;
+	wopts.cellFormula = true;
 	wopts.cellStyles = true;
 	wopts.sheetStubs = true;
 	wopts.bookVBA = true;
@@ -174,6 +194,10 @@ if(program.props) {
 /* full workbook formats */
 workbook_formats.forEach(function(m) { if(program[m[0]] || isfmt(m[0])) {
 		wopts.bookType = m[1];
+		if(wopts.bookType == "numbers") try {
+			var XLSX_ZAHL = require("../dist/xlsx.zahl");
+			wopts.numbers = XLSX_ZAHL;
+		} catch(e) {}
 		if(wb) X.writeFile(wb, program.output || sheetname || ((filename || "") + "." + m[2]), wopts);
 		process.exit(0);
 } });
@@ -216,6 +240,7 @@ if(!program.quiet && !program.book) console.error(target_sheet);
 	['rtf', '.rtf'],
 	['txt', '.txt'],
 	['dbf', '.dbf'],
+	['wk1', '.wk1'],
 	['dif', '.dif']
 ].forEach(function(m) { if(program[m[0]] || isfmt(m[1])) {
 	wopts.bookType = m[0];

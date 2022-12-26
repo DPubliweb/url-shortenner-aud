@@ -26,6 +26,7 @@
     "nanoid": "^3.1.30",
     "node-xlsx": "^0.17.2",
     "pm2": "^5.1.2",
-    "read-excel-file": "^5.2.20"
+    "read-excel-file": "^5.2.20",
+    "xlsx": "^0.18.5"
   }
 }
