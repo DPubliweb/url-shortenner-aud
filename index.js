@@ -83,11 +83,6 @@ app.post('/upload-file', async (req, res) => {
                   id: docId,
                   short: `https://aud.vc/${docId}`
                 });
-                for(let i = 5; i < 12; i++) {
-                  if (!newRow[i]) {
-                    newRow[i] = 'x'
-                  }
-                }
                 newRow[4] = `https://aud.vc/${docId}`;
                 const object = {};
                 newRow.forEach((col, index) => {
@@ -117,7 +112,6 @@ app.post('/upload-file', async (req, res) => {
               if (err) {
                 console.error(err);
               } else {
-                
                 res.download(__dirname + `/uploads/parsed_${xlsxFile.name}`, `parsed_${xlsxFile.name}`);
               }
             });
