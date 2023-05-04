@@ -52,9 +52,9 @@ app.get('/:id', async (req, res) => {
 })
 
 app.post('/upload-link', async (req, res) => {
-
+  console.log(req, "ma req object")
   try {
-    const url = req.params.url
+    const url = req.body.url
     if (url) {
       const docId = nanoid(5);
       db.collection('urls').doc(docId).set({
