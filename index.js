@@ -37,7 +37,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.get('/', (req, res) => {
-  res.sendFile('./index.html', {root: __dirname });
+  res.sendFile('./index.html', { root: __dirname });
 });
 
 app.get('/:id', async (req, res) => {
@@ -50,6 +50,38 @@ app.get('/:id', async (req, res) => {
     }
   }
 })
+
+app.post('/upload-link', async (req, res) => {
+
+  try {
+    const url = req.params.url
+    if (url) {
+      const docId = nanoid(5);
+      db.collection('urls').doc(docId).set({
+        url: url,
+        id: docId,
+        short: `https://aud.vc/${docId}`
+      }).then(() => {
+        res.send({
+          status: true,
+          message: "short link success",
+          data: {
+            url,
+            short: `https://aud.vc/${docId}`
+          }
+        })
+
+      }).catch((err) => {
+        console.log("An error has occured")
+      })
+    } else {
+      console.log('No url found');
+    }
+  } catch (error) {
+    console.log(error)
+  }
+})
+
 
 app.post('/upload-file', async (req, res) => {
   const wb = new xl.Workbook();
@@ -72,7 +104,7 @@ app.post('/upload-file', async (req, res) => {
         readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`).then((rows) => {
           if (rows.length > 0) {
             const formattedRow = [];
-            const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal','code']
+            const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal', 'code']
             rows.forEach((row) => {
               const newRow = row
               const url = row[4]; // col E
