@@ -86,16 +86,16 @@ app.post('/upload-file', async (req, res) => {
       xlsxFile.mv('./uploads/' + xlsxFile.name, function (err) {
         if (err) return res.status(500).send(err);
 
-        readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`).then((rows) => {
+        readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`).then(async (rows) => {
           if (rows.length > 0) {
             const formattedRow = [];
             const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal','code']
-            rows.forEach(async (row) => {
-              const newRow = row
+            const promises = rows.map(async (row) => {  // Changed from forEach to map
+              const newRow = row;
               const url = row[4]; // col E
               if (url) {
                 const docId = nanoid(5);
-                db.collection('urls').doc(docId).set({
+                await db.collection('urls').doc(docId).set({  // Added await here
                   url: url,
                   id: docId,
                   short: `https://aud.vc/${docId}`,
@@ -122,7 +122,9 @@ app.post('/upload-file', async (req, res) => {
                 console.log('No url found');
               }
             });
-            console.log(formattedRow);
+
+            await Promise.all(promises);  // Added this line
+
             let headingColumnIndex = 1;
             cols.forEach(heading => {
               ws.cell(1, headingColumnIndex++)
@@ -160,3 +162,4 @@ server.listen(port, () => {
 });
 
 module.exports = app;
+
