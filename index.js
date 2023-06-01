@@ -94,14 +94,13 @@ app.post('/upload-file', async (req, res) => {
               const url = row[4]; // col E
               if (url) {
                 const docId = nanoid(5);
-                console.log('MAKE A WISH')
                 db.collection('urls').doc(docId).set({
                   url: url,
                   id: docId,
                   short: `https://aud.vc/${docId}`,
                   clicked: false,
                   campaign: req.body.campaign
-                }).then (()=> console.log("SUCCESS CREATE DOC"))
+                }),
                 newRow[4] = `https://aud.vc/${docId}`;
 
                 // Update the link count for the campaign
@@ -122,7 +121,7 @@ app.post('/upload-file', async (req, res) => {
                 console.log('No url found');
               }
             });
-            //console.log(formattedRow);
+            console.log(formattedRow);
             let headingColumnIndex = 1;
             cols.forEach(heading => {
               ws.cell(1, headingColumnIndex++)
