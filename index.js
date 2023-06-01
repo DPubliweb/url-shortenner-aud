@@ -122,7 +122,7 @@ app.post('/upload-file', async (req, res) => {
                 console.log('No url found');
               }
             });
-            console.log(formattedRow);
+            //console.log(formattedRow);
             let headingColumnIndex = 1;
             cols.forEach(heading => {
               ws.cell(1, headingColumnIndex++)
