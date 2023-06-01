@@ -37,7 +37,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.get('/', (req, res) => {
-  res.sendFile('./index.html', { root: __dirname });
+  res.sendFile('./index.html', {root: __dirname });
 });
 
 app.get('/:id', async (req, res) => {
@@ -53,47 +53,23 @@ app.get('/:id', async (req, res) => {
 
 app.get('/campaign/:campaignName/clicks', async (req, res) => {
   const campaignName = req.params.campaignName;
-  const querySnapshot = await db.collection('urls')
+
+  // Fetch the click count
+  const clickedSnapshot = await db.collection('urls')
     .where('campaign', '==', campaignName)
     .where('clicked', '==', true)
     .get();
-  
-  const clickCount = querySnapshot.docs.length;
+  const clickCount = clickedSnapshot.docs.length;
 
-  res.send(`Total clicks for campaign ${campaignName}: ${clickCount}`);
+  // Fetch the link count
+  const campaignDoc = await db.collection('campaigns').doc(campaignName).get();
+  const linkCount = campaignDoc.data().linkCount;
+
+  // Calculate the click rate
+  const clickRate = clickCount / linkCount;
+
+  res.send(`Total clicks for campaign ${campaignName}: ${clickCount}\nTotal links for campaign ${campaignName}: ${linkCount}\nClick rate for campaign ${campaignName}: ${clickRate}`);
 });
-
-app.post('/upload-link', async (req, res) => {
-  console.log(req, "ma req object")
-  try {
-    const url = req.body.url
-    if (url) {
-      const docId = nanoid(5);
-      db.collection('urls').doc(docId).set({
-        url: url,
-        id: docId,
-        short: `https://aud.vc/${docId}`
-      }).then(() => {
-        res.send({
-          status: true,
-          message: "short link success",
-          data: {
-            url,
-            short: `https://aud.vc/${docId}`
-          }
-        })
-
-      }).catch((err) => {
-        console.log("An error has occured")
-      })
-    } else {
-      console.log('No url found');
-    }
-  } catch (error) {
-    console.log(error)
-  }
-})
-
 
 app.post('/upload-file', async (req, res) => {
   const wb = new xl.Workbook();
@@ -112,8 +88,8 @@ app.post('/upload-file', async (req, res) => {
         readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`).then((rows) => {
           if (rows.length > 0) {
             const formattedRow = [];
-            const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal', 'code']
-            rows.forEach((row) => {
+            const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal','code']
+            rows.forEach(async (row) => {
               const newRow = row
               const url = row[4]; // col E
               if (url) {
@@ -122,10 +98,20 @@ app.post('/upload-file', async (req, res) => {
                   url: url,
                   id: docId,
                   short: `https://aud.vc/${docId}`,
-                  campaign: req.body.campaign, // Get campaign name from request body
-                  clicked: false // Initialize clicked as false
+                  clicked: false,
+                  campaign: req.body.campaign
                 });
                 newRow[4] = `https://aud.vc/${docId}`;
+
+                // Update the link count for the campaign
+                const campaignRef = db.collection('campaigns').doc(req.body.campaign);
+                const campaignDoc = await campaignRef.get();
+                if (campaignDoc.exists) {
+                  campaignRef.update({ linkCount: admin.firestore.FieldValue.increment(1) });
+                } else {
+                  campaignRef.set({ linkCount: 1 });
+                }
+
                 const object = {};
                 newRow.forEach((col, index) => {
                   object[cols[index]] = col || '';
@@ -134,7 +120,7 @@ app.post('/upload-file', async (req, res) => {
               } else {
                 console.log('No url found');
               }
-            })
+            });
             console.log(formattedRow);
             let headingColumnIndex = 1;
             cols.forEach(heading => {
