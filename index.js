@@ -9,9 +9,9 @@ const cookieParser = require('cookie-parser');
 const fileUpload = require('express-fileupload');
 const bodyParser = require('body-parser');
 const morgan = require('morgan');
-const readXlsxFile = require('read-excel-file/node')
+const readXlsxFile = require('read-excel-file/node');
 const xl = require('excel4node');
-const { nanoid } = require('nanoid')
+const { nanoid } = require('nanoid');
 const _ = require('lodash');
 
 // Express service
@@ -41,15 +41,27 @@ app.get('/', (req, res) => {
 });
 
 app.get('/:id', async (req, res) => {
-  const doc = await db.collection('urls').doc(req.params.id).get();
-  if (doc) {
-    if (!doc.exists) {
-      return res.send('No such url exists');
-    } else {
-      return res.redirect(doc.data().url);
-    }
+  const docRef = db.collection('urls').doc(req.params.id);
+  const doc = await docRef.get();
+  if (doc.exists) {
+    docRef.update({ clicked: true });
+    return res.redirect(doc.data().url);
+  } else {
+    return res.send('No such url exists');
   }
-})
+});
+
+app.get('/campaign/:campaignName/clicks', async (req, res) => {
+  const campaignName = req.params.campaignName;
+  const querySnapshot = await db.collection('urls')
+    .where('campaign', '==', campaignName)
+    .where('clicked', '==', true)
+    .get();
+  
+  const clickCount = querySnapshot.docs.length;
+
+  res.send(`Total clicks for campaign ${campaignName}: ${clickCount}`);
+});
 
 app.post('/upload-file', async (req, res) => {
   const wb = new xl.Workbook();
@@ -61,11 +73,7 @@ app.post('/upload-file', async (req, res) => {
         message: 'No file uploaded'
       });
     } else {
-      //Use the name of the input field (i.e. "avatar") to retrieve the uploaded file
       const xlsxFile = req.files.xlsxFile;
-
-      //Use the mv() method to place the file in upload directory (i.e. "uploads")
-
       xlsxFile.mv('./uploads/' + xlsxFile.name, function (err) {
         if (err) return res.status(500).send(err);
 
@@ -81,7 +89,9 @@ app.post('/upload-file', async (req, res) => {
                 db.collection('urls').doc(docId).set({
                   url: url,
                   id: docId,
-                  short: `https://aud.vc/${docId}`
+                  short: `https://aud.vc/${docId}`,
+                  campaign: req.body.campaign, // Get campaign name from request body
+                  clicked: false // Initialize clicked as false
                 });
                 newRow[4] = `https://aud.vc/${docId}`;
                 const object = {};
@@ -117,17 +127,6 @@ app.post('/upload-file', async (req, res) => {
             });
           }
         });
-
-        // //send response
-        // res.send({
-        //   status: true,
-        //   message: 'File is uploaded',
-        //   data: {
-        //     name: xlsxFile.name,
-        //     mimetype: xlsxFile.mimetype,
-        //     size: xlsxFile.size
-        //   }
-        // });
       });
     }
   } catch (err) {
