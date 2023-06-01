@@ -27,6 +27,7 @@ const db = admin.firestore();
 // enable files upload
 app.use(fileUpload({
   createParentPath: true,
+  parseNested: true,
   limits: {
     fileSize: 256 * 1024 * 1024 * 1024 //2MB max file(s) size
   },
