@@ -100,7 +100,7 @@ app.post('/upload-file', async (req, res) => {
                   short: `https://aud.vc/${docId}`,
                   clicked: false,
                   campaign: req.body.campaign
-                });
+                }).then (()=> console.log("SUCCESS CREATE DOC"))
                 newRow[4] = `https://aud.vc/${docId}`;
 
                 // Update the link count for the campaign
