@@ -94,6 +94,7 @@ app.post('/upload-file', async (req, res) => {
               const url = row[4]; // col E
               if (url) {
                 const docId = nanoid(5);
+                console.log('MAKE A WISH')
                 db.collection('urls').doc(docId).set({
                   url: url,
                   id: docId,
