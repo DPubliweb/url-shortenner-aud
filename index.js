@@ -90,16 +90,13 @@ app.post('/upload-file', async (req, res) => {
           if (rows.length > 0) {
             const formattedRow = [];
             const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal','code']
-    
-            // Calculate total line count (subtract one to ignore header row if it exists)
             const totalLines = rows.length - 1;
-    
-            const promises = rows.map(async (row) => {
+            const promises = rows.map(async (row) => {  // Changed from forEach to map
               const newRow = row;
               const url = row[4]; // col E
               if (url) {
                 const docId = nanoid(5);
-                await db.collection('urls').doc(docId).set({
+                await db.collection('urls').doc(docId).set({  // Added await here
                   url: url,
                   id: docId,
                   short: `https://aud.vc/${docId}`,
@@ -107,7 +104,16 @@ app.post('/upload-file', async (req, res) => {
                   campaign: req.body.campaign
                 });
                 newRow[4] = `https://aud.vc/${docId}`;
-    
+
+                // Update the link count for the campaign
+                const campaignRef = db.collection('campaigns').doc(req.body.campaign);
+                const campaignDoc = await campaignRef.get();
+                if (campaignDoc.exists) {
+                  campaignRef.update({ linkCount: totalLines });
+                } else {
+                  campaignRef.set({ linkCount: totalLines });
+                }
+
                 const object = {};
                 newRow.forEach((col, index) => {
                   object[cols[index]] = col || '';
@@ -117,20 +123,9 @@ app.post('/upload-file', async (req, res) => {
                 console.log('No url found');
               }
             });
-    
-            await Promise.all(promises);
-    
-            // Update the link count for the campaign
-            const campaignRef = db.collection('campaigns').doc(req.body.campaign);
-            const campaignDoc = await campaignRef.get();
-            if (campaignDoc.exists) {
-              campaignRef.update({ linkCount: totalLines });
-            } else {
-              campaignRef.set({ linkCount: totalLines });
-            }
-          }
-        });
-    
+
+            await Promise.all(promises);  // Added this line
+
             let headingColumnIndex = 1;
             cols.forEach(heading => {
               ws.cell(1, headingColumnIndex++)
