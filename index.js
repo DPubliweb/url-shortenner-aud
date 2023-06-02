@@ -109,8 +109,11 @@ app.post('/upload-file', async (req, res) => {
                 const campaignRef = db.collection('campaigns').doc(req.body.campaign);
                 const campaignDoc = await campaignRef.get();
                 if (campaignDoc.exists) {
-                  campaignRef.update({ linkCount: totalLines });
+                  // If the document already exists, add the totalLines to the existing linkCount
+                  const currentLinkCount = campaignDoc.data().linkCount;
+                  campaignRef.update({ linkCount: currentLinkCount + totalLines });
                 } else {
+                  // If the document doesn't exist, set the linkCount as totalLines
                   campaignRef.set({ linkCount: totalLines });
                 }
 
