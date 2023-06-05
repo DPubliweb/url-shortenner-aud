@@ -89,15 +89,11 @@ app.post('/upload-file', async (req, res) => {
         readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`).then(async (rows) => {
           if (rows.length > 0) {
             const formattedRow = [];
-            const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal','code','cohort','campaign']
+            const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal','code']
             const totalLines = rows.length - 1;
-            let boostCount = 0;
             const promises = rows.map(async (row) => {  // Changed from forEach to map
               const newRow = row;
               const url = row[4]; // col E
-              if (newRow[9] === 'B') {
-                boostCount++;
-            }
               if (url) {
                 const docId = nanoid(5);
                 await db.collection('urls').doc(docId).set({  // Added await here
@@ -108,16 +104,14 @@ app.post('/upload-file', async (req, res) => {
                   campaign: req.body.campaign
                 });
                 newRow[4] = `https://aud.vc/${docId}`;
-                // Add the campaign name to the 10th column
-                newRow[10] = req.body.campaign;  // Added this line
 
                 // Update the link count for the campaign
                 const campaignRef = db.collection('campaigns').doc(req.body.campaign);
                 const campaignDoc = await campaignRef.get();
                 if (campaignDoc.exists) {
-                  campaignRef.update({ linkCount: totalLines, boostCount: boostCount });
+                  campaignRef.update({ linkCount: totalLines });
                 } else {
-                  campaignRef.set({ linkCount: totalLines, boostCount: boostCount });
+                  campaignRef.set({ linkCount: totalLines });
                 }
 
                 const object = {};
@@ -169,4 +163,3 @@ server.listen(port, () => {
 });
 
 module.exports = app;
-
