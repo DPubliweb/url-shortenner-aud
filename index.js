@@ -42,12 +42,14 @@ app.get('/', (req, res) => {
 
 app.get('/:id', async (req, res) => {
   const doc = await db.collection('urls').doc(req.params.id).get();
-  if (!doc.exists) {
-    return res.send('No such url exists');
-  } else {
-    return res.redirect(doc.data().url);
+  if (doc) {
+    if (!doc.exists) {
+      return res.send('No such url exists');
+    } else {
+      return res.redirect(doc.data().url);
+    }
   }
-});
+})
 
 app.post('/upload-link', async (req, res) => {
   console.log(req, "ma req object")
