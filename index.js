@@ -9,9 +9,9 @@ const cookieParser = require('cookie-parser');
 const fileUpload = require('express-fileupload');
 const bodyParser = require('body-parser');
 const morgan = require('morgan');
-const readXlsxFile = require('read-excel-file/node');
+const readXlsxFile = require('read-excel-file/node')
 const xl = require('excel4node');
-const { nanoid } = require('nanoid');
+const { nanoid } = require('nanoid')
 const _ = require('lodash');
 
 // Express service
@@ -27,7 +27,6 @@ const db = admin.firestore();
 // enable files upload
 app.use(fileUpload({
   createParentPath: true,
-  parseNested: true,
   limits: {
     fileSize: 256 * 1024 * 1024 * 1024 //2MB max file(s) size
   },
@@ -38,39 +37,51 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.get('/', (req, res) => {
-  res.sendFile('./index.html', {root: __dirname });
+  res.sendFile('./index.html', { root: __dirname });
 });
 
 app.get('/:id', async (req, res) => {
-  const docRef = db.collection('urls').doc(req.params.id);
-  const doc = await docRef.get();
-  if (doc.exists) {
-    docRef.update({ clicked: true });
-    return res.redirect(doc.data().url);
-  } else {
-    return res.send('No such url exists');
+  const doc = await db.collection('urls').doc(req.params.id).get();
+  if (doc) {
+    if (!doc.exists) {
+      return res.send('No such url exists');
+    } else {
+      return res.redirect(doc.data().url);
+    }
   }
-});
+})
 
-app.get('/campaign/:campaignName/clicks', async (req, res) => {
-  const campaignName = req.params.campaignName;
+app.post('/upload-link', async (req, res) => {
+  console.log(req, "ma req object")
+  try {
+    const url = req.body.url
+    if (url) {
+      const docId = nanoid(5);
+      db.collection('urls').doc(docId).set({
+        url: url,
+        id: docId,
+        short: `https://aud.vc/${docId}`
+      }).then(() => {
+        res.send({
+          status: true,
+          message: "short link success",
+          data: {
+            url,
+            short: `https://aud.vc/${docId}`
+          }
+        })
 
-  // Fetch the click count
-  const clickedSnapshot = await db.collection('urls')
-    .where('campaign', '==', campaignName)
-    .where('clicked', '==', true)
-    .get();
-  const clickCount = clickedSnapshot.docs.length;
+      }).catch((err) => {
+        console.log("An error has occured")
+      })
+    } else {
+      console.log('No url found');
+    }
+  } catch (error) {
+    console.log(error)
+  }
+})
 
-  // Fetch the link count
-  const campaignDoc = await db.collection('campaigns').doc(campaignName).get();
-  const linkCount = campaignDoc.data().linkCount;
-
-  // Calculate the click rate
-  const clickRate = clickCount / linkCount;
-
-  res.send(`Total clicks for campaign ${campaignName}: ${clickCount}\nTotal links for campaign ${campaignName}: ${linkCount}\nClick rate for campaign ${campaignName}: ${clickRate}`);
-});
 
 app.post('/upload-file', async (req, res) => {
   const wb = new xl.Workbook();
@@ -82,38 +93,29 @@ app.post('/upload-file', async (req, res) => {
         message: 'No file uploaded'
       });
     } else {
+      //Use the name of the input field (i.e. "avatar") to retrieve the uploaded file
       const xlsxFile = req.files.xlsxFile;
+
+      //Use the mv() method to place the file in upload directory (i.e. "uploads")
+
       xlsxFile.mv('./uploads/' + xlsxFile.name, function (err) {
         if (err) return res.status(500).send(err);
 
-        readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`).then(async (rows) => {
+        readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`).then((rows) => {
           if (rows.length > 0) {
             const formattedRow = [];
-            const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal','code']
-            const totalLines = rows.length - 1;
-            const promises = rows.map(async (row) => {  // Changed from forEach to map
-              const newRow = row;
+            const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal', 'code']
+            rows.forEach((row) => {
+              const newRow = row
               const url = row[4]; // col E
               if (url) {
                 const docId = nanoid(5);
-                await db.collection('urls').doc(docId).set({  // Added await here
+                db.collection('urls').doc(docId).set({
                   url: url,
                   id: docId,
-                  short: `https://aud.vc/${docId}`,
-                  clicked: false,
-                  campaign: req.body.campaign
+                  short: `https://aud.vc/${docId}`
                 });
                 newRow[4] = `https://aud.vc/${docId}`;
-
-                // Update the link count for the campaign
-                const campaignRef = db.collection('campaigns').doc(req.body.campaign);
-                const campaignDoc = await campaignRef.get();
-                if (campaignDoc.exists) {
-                  campaignRef.update({ linkCount: totalLines });
-                } else {
-                  campaignRef.set({ linkCount: totalLines });
-                }
-
                 const object = {};
                 newRow.forEach((col, index) => {
                   object[cols[index]] = col || '';
@@ -122,10 +124,8 @@ app.post('/upload-file', async (req, res) => {
               } else {
                 console.log('No url found');
               }
-            });
-
-            await Promise.all(promises);  // Added this line
-
+            })
+            console.log(formattedRow);
             let headingColumnIndex = 1;
             cols.forEach(heading => {
               ws.cell(1, headingColumnIndex++)
@@ -149,6 +149,17 @@ app.post('/upload-file', async (req, res) => {
             });
           }
         });
+
+        // //send response
+        // res.send({
+        //   status: true,
+        //   message: 'File is uploaded',
+        //   data: {
+        //     name: xlsxFile.name,
+        //     mimetype: xlsxFile.mimetype,
+        //     size: xlsxFile.size
+        //   }
+        // });
       });
     }
   } catch (err) {
