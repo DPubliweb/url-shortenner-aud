@@ -38,55 +38,44 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.get('/', (req, res) => {
-  res.sendFile('./index.html', { root: __dirname });
+  res.sendFile('./index.html', {root: __dirname });
 });
 
 app.get('/:id', async (req, res) => {
-  try {
-    const docRef = db.collection('urls').doc(req.params.id);
-    const doc = await docRef.get();
-    if (doc.exists) {
-      await docRef.update({ clicked: true });
-      return res.redirect(doc.data().url);
-    } else {
-      return res.send('No such url exists');
-    }
-  } catch (err) {
-    console.error(err);
-    res.status(502).send('Bad Gateway');
+  const docRef = db.collection('urls').doc(req.params.id);
+  const doc = await docRef.get();
+  if (doc.exists) {
+    docRef.update({ clicked: true });
+    return res.redirect(doc.data().url);
+  } else {
+    return res.send('No such url exists');
   }
 });
 
 app.get('/campaign/:campaignName/clicks', async (req, res) => {
-  try {
-    const campaignName = req.params.campaignName;
+  const campaignName = req.params.campaignName;
 
-    // Fetch the click count
-    const clickedSnapshot = await db.collection('urls')
-      .where('campaign', '==', campaignName)
-      .where('clicked', '==', true)
-      .get();
-    const clickCount = clickedSnapshot.docs.length;
+  // Fetch the click count
+  const clickedSnapshot = await db.collection('urls')
+    .where('campaign', '==', campaignName)
+    .where('clicked', '==', true)
+    .get();
+  const clickCount = clickedSnapshot.docs.length;
 
-    // Fetch the link count
-    const campaignDoc = await db.collection('campaigns').doc(campaignName).get();
-    const linkCount = campaignDoc.data().linkCount;
+  // Fetch the link count
+  const campaignDoc = await db.collection('campaigns').doc(campaignName).get();
+  const linkCount = campaignDoc.data().linkCount;
 
-    // Calculate the click rate
-    const clickRate = clickCount / linkCount;
+  // Calculate the click rate
+  const clickRate = clickCount / linkCount;
 
-    res.send(`Total clicks for campaign ${campaignName}: ${clickCount}\nTotal links for campaign ${campaignName}: ${linkCount}\nClick rate for campaign ${campaignName}: ${clickRate}`);
-  } catch (err) {
-    console.error(err);
-    res.status(502).send('Bad Gateway');
-  }
+  res.send(`Total clicks for campaign ${campaignName}: ${clickCount}\nTotal links for campaign ${campaignName}: ${linkCount}\nClick rate for campaign ${campaignName}: ${clickRate}`);
 });
 
 app.post('/upload-file', async (req, res) => {
+  const wb = new xl.Workbook();
+  const ws = wb.addWorksheet('FileSheet');
   try {
-    const wb = new xl.Workbook();
-    const ws = wb.addWorksheet('FileSheet');
-  
     if (!req.files) {
       res.send({
         status: false,
@@ -94,45 +83,41 @@ app.post('/upload-file', async (req, res) => {
       });
     } else {
       const xlsxFile = req.files.xlsxFile;
-      xlsxFile.mv('./uploads/' + xlsxFile.name, async function (err) {
-        if (err) {
-          console.error(err);
-          return res.status(500).send(err);
-        }
+      xlsxFile.mv('./uploads/' + xlsxFile.name, function (err) {
+        if (err) return res.status(500).send(err);
 
-        try {
-          const rows = await readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`);
+        readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`).then(async (rows) => {
           if (rows.length > 0) {
             const formattedRow = [];
-            const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal', 'code', 'cohort', 'campaign']
+            const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal','code','cohort','campaign']
             const totalLines = rows.length - 1;
             let boostCount = 0;
-            const promises = rows.map(async (row) => {
+            const promises = rows.map(async (row) => {  // Changed from forEach to map
               const newRow = row;
               const url = row[4]; // col E
               if (newRow[9] === 'B') {
                 boostCount++;
-              }
+            }
               if (url) {
                 const docId = nanoid(5);
-                const campaign = req.body.hasOwnProperty('campaign') ? req.body.campaign : '';
-                await db.collection('urls').doc(docId).set({
+                await db.collection('urls').doc(docId).set({  // Added await here
                   url: url,
                   id: docId,
                   short: `https://aud.vc/${docId}`,
                   clicked: false,
-                  campaign: campaign
+                  campaign: req.body.campaign
                 });
                 newRow[4] = `https://aud.vc/${docId}`;
-                newRow[10] = campaign;
+                // Add the campaign name to the 10th column
+                newRow[10] = req.body.campaign;  // Added this line
 
                 // Update the link count for the campaign
-                const campaignRef = db.collection('campaigns').doc(campaign);
+                const campaignRef = db.collection('campaigns').doc(req.body.campaign);
                 const campaignDoc = await campaignRef.get();
                 if (campaignDoc.exists) {
-                  await campaignRef.update({ linkCount: totalLines, boostCount: boostCount });
+                  campaignRef.update({ linkCount: totalLines, boostCount: boostCount });
                 } else {
-                  await campaignRef.set({ linkCount: totalLines, boostCount: boostCount });
+                  campaignRef.set({ linkCount: totalLines, boostCount: boostCount });
                 }
 
                 const object = {};
@@ -145,7 +130,7 @@ app.post('/upload-file', async (req, res) => {
               }
             });
 
-            await Promise.all(promises);
+            await Promise.all(promises);  // Added this line
 
             let headingColumnIndex = 1;
             cols.forEach(heading => {
@@ -169,22 +154,12 @@ app.post('/upload-file', async (req, res) => {
               }
             });
           }
-        } catch (err) {
-          console.error(err);
-          res.status(502).send('Bad Gateway');
-        }
+        });
       });
     }
   } catch (err) {
-    console.error(err);
-    res.status(502).send('Bad Gateway');
+    res.status(500).send(err);
   }
-});
-
-// Gestionnaire d'erreurs pour les erreurs 502
-app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(502).send('Bad Gateway');
 });
 
 // Instantiate a new express based http server
@@ -194,3 +169,4 @@ server.listen(port, () => {
 });
 
 module.exports = app;
+
