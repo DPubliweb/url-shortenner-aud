@@ -72,7 +72,7 @@ app.post('/upload-file', async (req, res) => {
         readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`).then((rows) => {
           if (rows.length > 0) {
             const formattedRow = [];
-            const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal','code']
+            const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'code', 'code_postal','cohort']
             rows.forEach((row) => {
               const newRow = row
               const url = row[4]; // col E
