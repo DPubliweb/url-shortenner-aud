@@ -60,7 +60,14 @@ app.get('/:id', async (req, res) => {
 });
 
 app.get('/campaign/*', async (req, res) => {
-  const campaignId = req.params[0]; 
+  // La partie de l'URL après '/campaign/' sera capturée dans un tableau appelé 0 dans req.params
+  const campaignPath = req.params[0]; // contient tout après '/campaign/'
+
+  try {
+    // Vous pourriez avoir besoin de décomposer la campagnePath pour obtenir l'ID de la campagne réel
+    // Si campaignPath est supposé être l'ID de la campagne, vous pouvez l'utiliser directement
+    const campaignId = campaignPath; // ou décomposer plus loin si nécessaire
+    
     const urlsSnapshot = await db.collection('urls').where('campaign', '==', campaignId).get();
     let totalClicks = 0;
 
