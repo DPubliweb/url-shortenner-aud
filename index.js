@@ -41,43 +41,15 @@ app.get('/', (req, res) => {
 });
 
 app.get('/:id', async (req, res) => {
-  const docRef = db.collection('urls').doc(req.params.id);
-  try {
-    const doc = await docRef.get();
+  const doc = await db.collection('urls').doc(req.params.id).get();
+  if (doc) {
     if (!doc.exists) {
-      return res.status(404).send('No such url exists');
+      return res.send('No such url exists');
     } else {
-      const urlData = doc.data();
-      // Rediriger vers l'URL réelle
-      res.redirect(urlData.url);
-      // Incrémenter le compteur de clics
-      await docRef.update({ clicks: admin.firestore.FieldValue.increment(1) });
-      // Vous pouvez également ajouter ici une logique pour attribuer le clic à une campagne spécifique si nécessaire
+      return res.redirect(doc.data().url);
     }
-  } catch (error) {
-    return res.status(500).send('Internal Server Error');
   }
-});
-
-app.get('/campaign/:campaignId/clicks', async (req, res) => {
-  try {
-    const campaignId = req.params.campaignId;
-    const urlsSnapshot = await db.collection('urls').where('campaign', '==', campaignId).get();
-    let totalClicks = 0;
-
-    urlsSnapshot.forEach(doc => {
-      const urlData = doc.data();
-      totalClicks += urlData.clicks || 0;
-    });
-
-    res.status(200).json({
-      campaign: campaignId,
-      clicks: totalClicks
-    });
-  } catch (error) {
-    res.status(500).send('Internal Server Error');
-  }
-});
+})
 
 app.post('/upload-file', async (req, res) => {
   const wb = new xl.Workbook();
@@ -89,68 +61,73 @@ app.post('/upload-file', async (req, res) => {
         message: 'No file uploaded'
       });
     } else {
-      // Retrieve the uploaded file
+      //Use the name of the input field (i.e. "avatar") to retrieve the uploaded file
       const xlsxFile = req.files.xlsxFile;
 
-      // Place the file in the upload directory
-      xlsxFile.mv('./uploads/' + xlsxFile.name, async function (err) {
+      //Use the mv() method to place the file in upload directory (i.e. "uploads")
+
+      xlsxFile.mv('./uploads/' + xlsxFile.name, function (err) {
         if (err) return res.status(500).send(err);
 
-        // Read the Excel file
-        const rows = await readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`);
-        if (rows.length > 0) {
-          // Adjust your columns array to include 'campaign'
-          const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal', 'code', 'campagne'];
-
-          // Assuming the first row of the sheet is the header
-          const header = rows.shift();
-
-          const formattedRows = rows.map((row, rowIndex) => {
-            const url = row[4]; // Assuming the URL is in column E
-            const campaignId = row[8]; // Assuming the campaign ID is in column I
-            const newRow = [...row];
-
-            if (url) {
-              const docId = nanoid(5);
-              db.collection('urls').doc(docId).set({
-                url: url,
-                id: docId,
-                short: `https://aud.vc/${docId}`,
-                campaign: campaignId,
-                clicks: 0 // Initialize click count
-              });
-
-              newRow[4] = `https://aud.vc/${docId}`; // Replace the URL with the short link
-            }
-
-            return cols.reduce((object, col, index) => {
-              object[col] = newRow[index] || '';
-              return object;
-            }, {});
-          });
-
-          console.log(formattedRows);
-
-          // Write headers to the first row
-          cols.forEach((heading, i) => ws.cell(1, i + 1).string(heading));
-
-          // Write the rest of the data
-          formattedRows.forEach((record, rowIndex) => {
-            Object.values(record).forEach((value, colIndex) => {
-              ws.cell(rowIndex + 2, colIndex + 1).string(value);
+        readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`).then((rows) => {
+          if (rows.length > 0) {
+            const formattedRow = [];
+            const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal','code']
+            rows.forEach((row) => {
+              const newRow = row
+              const url = row[4]; // col E
+              if (url) {
+                const docId = nanoid(5);
+                db.collection('urls').doc(docId).set({
+                  url: url,
+                  id: docId,
+                  short: `https://aud.vc/${docId}`
+                });
+                newRow[4] = `https://aud.vc/${docId}`;
+                const object = {};
+                newRow.forEach((col, index) => {
+                  object[cols[index]] = col || '';
+                });
+                formattedRow.push(object)
+              } else {
+                console.log('No url found');
+              }
+            })
+            console.log(formattedRow);
+            let headingColumnIndex = 1;
+            cols.forEach(heading => {
+              ws.cell(1, headingColumnIndex++)
+                .string(heading)
             });
-          });
+            let rowIndex = 2;
+            formattedRow.forEach(record => {
+              let columnIndex = 1;
+              Object.keys(record).forEach(columnName => {
+                ws.cell(rowIndex, columnIndex++)
+                  .string(record[columnName])
+              });
+              rowIndex++;
+            });
+            wb.write(__dirname + `/uploads/parsed_${xlsxFile.name}`, function (err, stats) {
+              if (err) {
+                console.error(err);
+              } else {
+                res.download(__dirname + `/uploads/parsed_${xlsxFile.name}`, `parsed_${xlsxFile.name}`);
+              }
+            });
+          }
+        });
 
-          // Save the new workbook
-          const parsedFilePath = __dirname + `/uploads/parsed_${xlsxFile.name}`;
-          wb.write(parsedFilePath, function (err) {
-            if (err) {
-              console.error(err);
-              return res.status(500).send(err);
-            }
-            res.download(parsedFilePath, `parsed_${xlsxFile.name}`);
-          });
-        }
+        // //send response
+        // res.send({
+        //   status: true,
+        //   message: 'File is uploaded',
+        //   data: {
+        //     name: xlsxFile.name,
+        //     mimetype: xlsxFile.mimetype,
+        //     size: xlsxFile.size
+        //   }
+        // });
       });
     }
   } catch (err) {
