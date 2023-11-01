@@ -59,9 +59,8 @@ app.get('/:id', async (req, res) => {
   }
 });
 
-app.get('/campaign/:campaignId/clicks', async (req, res) => {
-  try {
-    const campaignId = req.params.campaignId;
+app.get('/campaign/*', async (req, res) => {
+  const campaignId = req.params[0]; 
     const urlsSnapshot = await db.collection('urls').where('campaign', '==', campaignId).get();
     let totalClicks = 0;
 
