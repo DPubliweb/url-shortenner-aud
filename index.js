@@ -106,7 +106,7 @@ app.post('/upload-file', async (req, res) => {
         const rows = await readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`);
         if (rows.length > 0) {
           // Adjust your columns array to include 'campaign'
-          const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'utm', 'code_postal', 'code', 'campagne'];
+          const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'code', 'code_postal', 'utm', 'campagne'];
 
           // Assuming the first row of the sheet is the header
           const header = rows.shift();
