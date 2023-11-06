@@ -25,7 +25,7 @@ admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
 const rateLimitWindowMs = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
-const maxAttemptsPerDay = 3; // Set the max attempts per IP per day
+const maxAttemptsPerDay = 10; // Set the max attempts per IP per day
 
 // This object will hold the IPs and timestamps of attempts
 const ipAccessLog = {};
