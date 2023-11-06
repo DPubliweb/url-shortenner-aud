@@ -24,6 +24,39 @@ const port = process.env.PORT || 8002;
 admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
+const rateLimitWindowMs = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+const maxAttemptsPerDay = 3; // Set the max attempts per IP per day
+
+// This object will hold the IPs and timestamps of attempts
+const ipAccessLog = {};
+
+app.use((req, res, next) => {
+  const ip = req.ip;
+
+  // Skip this logic for your own IP
+  if (ip === '84.110.159.34') {
+    return next();
+  }
+
+  const now = Date.now();
+  if (!ipAccessLog[ip]) {
+    ipAccessLog[ip] = [];
+  }
+
+  // Filter out only the logs within the last 24 hours
+  ipAccessLog[ip] = ipAccessLog[ip].filter(timestamp => now - timestamp < rateLimitWindowMs);
+
+  // Check if the IP has exceeded the max attempts
+  if (ipAccessLog[ip].length >= maxAttemptsPerDay) {
+    return res.status(429).send('Too many requests. Try again later.');
+  }
+
+  // Log this attempt
+  ipAccessLog[ip].push(now);
+
+  next();
+});
+
 // enable files upload
 app.use(fileUpload({
   createParentPath: true,
@@ -164,6 +197,16 @@ app.post('/upload-file', async (req, res) => {
     res.status(500).send(err);
   }
 });
+
+setInterval(() => {
+  const now = Date.now();
+  Object.keys(ipAccessLog).forEach(ip => {
+    ipAccessLog[ip] = ipAccessLog[ip].filter(timestamp => now - timestamp < rateLimitWindowMs);
+    if (ipAccessLog[ip].length === 0) {
+      delete ipAccessLog[ip];
+    }
+  });
+}, rateLimitWindowMs);
 
 // Instantiate a new express based http server
 const server = http.createServer(app);
