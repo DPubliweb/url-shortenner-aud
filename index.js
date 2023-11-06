@@ -123,7 +123,8 @@ app.post('/upload-file', async (req, res) => {
                 id: docId,
                 short: `https://aud.vc/${docId}`,
                 campaign: campaignId,
-                clicks: 0 // Initialize click count
+                clicks: 0, // Initialize click count
+                createdAt: admin.firestore.FieldValue.serverTimestamp() // Add the timestamp here
               });
 
               newRow[4] = `https://aud.vc/${docId}`; // Replace the URL with the short link
