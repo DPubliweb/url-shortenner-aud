@@ -11,8 +11,13 @@ const bodyParser = require('body-parser');
 const morgan = require('morgan');
 const readXlsxFile = require('read-excel-file/node')
 const xl = require('excel4node');
-const { nanoid } = require('nanoid')
+//const { nanoid } = require('nanoid')
 const _ = require('lodash');
+//création de l'id de 5 caractères, comprenant aussi les caractères spéciaux
+const { customAlphabet } = require('nanoid');
+const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_-!@$&*()';
+const length = 5; // La longueur souhaitée de l'ID
+const nanoid = customAlphabet(alphabet, length);
 
 // Express service
 const express = require('express');
@@ -23,6 +28,53 @@ const port = process.env.PORT || 8002;
 
 admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
+
+// vérification de la présence de l'IP dans les IP bloquées pour activité suspicieuse
+const checkBlockedIP = async (req, res, next) => {
+  const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+  const blockedIPRef = db.collection('blockedIps').doc(ip);
+  const doc = await blockedIPRef.get();
+
+  if (doc.exists && doc.data().blocked) {
+    return res.status(403).send('Your IP has been blocked due to suspicious activity.');
+  } else {
+    next();
+  }
+};
+
+app.use(checkBlockedIP);
+
+app.get('/:id', async (req, res) => {
+  const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+  const { id } = req.params;
+  const docRef = db.collection('urls').doc(id);
+  //blocage de l'IP en cas d'activité suspicieuse
+  try {
+    const doc = await docRef.get();
+    if (!doc.exists) {
+      // Si l'URL n'existe pas, bloquez l'IP et informez l'utilisateur
+      await db.collection('blockedIps').doc(ip).set({ blocked: true });
+      return res.status(404).send('URL not found and your IP has been blocked.');
+    }
+    
+    const urlData = doc.data();
+    res.redirect(urlData.url);
+    await docRef.update({ clicks: admin.firestore.FieldValue.increment(1) });
+  } catch (error) {
+    return res.status(500).send('Internal Server Error');
+  }
+});
+
+// Route pour débloquer une IP
+app.post('/unblock-ip', async (req, res) => {
+  const { ipToUnblock } = req.body;
+  try {
+    await db.collection('blockedIps').doc(ipToUnblock).delete();
+    res.send('IP has been successfully unblocked.');
+  } catch (error) {
+    res.status(500).send('Internal Server Error');
+  }
+});
 
 
 // enable files upload
@@ -118,14 +170,14 @@ app.post('/upload-file', async (req, res) => {
             const newRow = [...row];
 
             if (url) {
-              const docId = nanoid(5);
+              const docId = nanoid();
               db.collection('urls').doc(docId).set({
                 url: url,
                 id: docId,
                 short: `https://aud.vc/${docId}`,
                 campaign: campaignId,
                 clicks: 0, // Initialize click count
-                createdAt: admin.firestore.FieldValue.serverTimestamp() // Add the timestamp here
+                createdAt: admin.firestore.FieldValue.serverTimestamp() // Ajout de la date
               });
 
               newRow[4] = `https://aud.vc/${docId}`; // Replace the URL with the short link
