@@ -31,15 +31,19 @@ const db = admin.firestore();
 
 // vérification de la présence de l'IP dans les IP bloquées pour activité suspicieuse
 const checkBlockedIP = async (req, res, next) => {
-  const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-  const blockedIPRef = db.collection('blockedIps').doc(ip);
-  const doc = await blockedIPRef.get();
+  // Prenez uniquement la première adresse IP si plusieurs sont listées
+  let ip = (req.headers['x-forwarded-for'] || req.connection.remoteAddress).split(',')[0].trim();
+  
+  // Vérifiez si cette IP est bloquée
+  const blockedIPsSnapshot = await db.collection('blockedIps').where('ip', '==', ip).get();
 
-  if (doc.exists && doc.data().blocked) {
-    return res.status(403).send('Your IP has been blocked due to suspicious activity.');
-  } else {
-    next();
+  if (!blockedIPsSnapshot.empty) {
+    const blocked = blockedIPsSnapshot.docs.some(doc => doc.data().blocked);
+    if (blocked) {
+      return res.status(403).send('Your IP has been blocked due to suspicious activity.');
+    }
   }
+  next();
 };
 
 app.use(checkBlockedIP);
