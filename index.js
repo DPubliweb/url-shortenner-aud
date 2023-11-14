@@ -45,16 +45,19 @@ const checkBlockedIP = async (req, res, next) => {
 app.use(checkBlockedIP);
 
 app.get('/:id', async (req, res) => {
-  const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+  let ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+  
+  // Prenez uniquement la première adresse IP si plusieurs sont listées
+  ip = ip.split(',')[0].trim();
+
   const { id } = req.params;
   const docRef = db.collection('urls').doc(id);
-  //blocage de l'IP en cas d'activité suspicieuse
+
   try {
     const doc = await docRef.get();
     if (!doc.exists) {
-      // Si l'URL n'existe pas, bloquez l'IP et informez l'utilisateur
       await db.collection('blockedIps').doc(ip).set({ blocked: true });
-      console.log("An IP has been blocked :", ip)
+      console.log("An IP has been blocked:", ip);
       return res.status(404).send('URL not found and your IP has been blocked.');
     }
     
