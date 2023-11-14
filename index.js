@@ -54,6 +54,7 @@ app.get('/:id', async (req, res) => {
     if (!doc.exists) {
       // Si l'URL n'existe pas, bloquez l'IP et informez l'utilisateur
       await db.collection('blockedIps').doc(ip).set({ blocked: true });
+      console.log("An IP has been blocked :", ip)
       return res.status(404).send('URL not found and your IP has been blocked.');
     }
     
