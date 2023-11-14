@@ -48,19 +48,24 @@ const checkBlockedIP = async (req, res, next) => {
 
 app.use(checkBlockedIP);
 
+// Cette route gère les requêtes vers les URLs courtes et vérifie également les IPs bloquées
 app.get('/:id', async (req, res) => {
-  let ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-  
-  // Prenez uniquement la première adresse IP si plusieurs sont listées
-  ip = ip.split(',')[0].trim();
-
+  let ip = (req.headers['x-forwarded-for'] || req.connection.remoteAddress).split(',')[0].trim();
   const { id } = req.params;
-  const docRef = db.collection('urls').doc(id);
 
+  // Vérifier si l'IP est bloquée
+  const blockedIPsSnapshot = await db.collection('blockedIps').where('ip', '==', ip).get();
+  if (!blockedIPsSnapshot.empty && blockedIPsSnapshot.docs.some(doc => doc.data().blocked)) {
+    console.log("Blocked IP access attempt:", ip);
+    return res.status(403).send('Your IP has been blocked due to suspicious activity.');
+  }
+
+  // Continuer avec la logique de redirection si l'IP n'est pas bloquée
+  const docRef = db.collection('urls').doc(id);
   try {
     const doc = await docRef.get();
     if (!doc.exists) {
-      await db.collection('blockedIps').doc(ip).set({ blocked: true });
+      await db.collection('blockedIps').doc(ip).set({ blocked: true, ip: ip }); // Assurez-vous d'enregistrer l'IP ici
       console.log("An IP has been blocked:", ip);
       return res.status(404).send('URL not found and your IP has been blocked.');
     }
@@ -72,6 +77,7 @@ app.get('/:id', async (req, res) => {
     return res.status(500).send('Internal Server Error');
   }
 });
+
 
 // Route pour débloquer une IP
 app.post('/unblock-ip', async (req, res) => {
@@ -101,24 +107,6 @@ app.get('/', (req, res) => {
   res.sendFile('./index.html', {root: __dirname });
 });
 
-app.get('/:id', async (req, res) => {
-  const docRef = db.collection('urls').doc(req.params.id);
-  try {
-    const doc = await docRef.get();
-    if (!doc.exists) {
-      return res.status(404).send('No such url exists');
-    } else {
-      const urlData = doc.data();
-      // Rediriger vers l'URL réelle
-      res.redirect(urlData.url);
-      // Incrémenter le compteur de clics
-      await docRef.update({ clicks: admin.firestore.FieldValue.increment(1) });
-      // Vous pouvez également ajouter ici une logique pour attribuer le clic à une campagne spécifique si nécessaire
-    }
-  } catch (error) {
-    return res.status(500).send('Internal Server Error');
-  }
-});
 
 app.get('/campaign/*', async (req, res) => {
   // La partie de l'URL après '/campaign/' sera capturée dans un tableau appelé 0 dans req.params
