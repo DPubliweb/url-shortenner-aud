@@ -15,7 +15,7 @@ const xl = require('excel4node');
 const _ = require('lodash');
 //création de l'id de 5 caractères, comprenant aussi les caractères spéciaux
 const { customAlphabet } = require('nanoid');
-const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_-!@$&*()';
+const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_-!@$&*';
 const length = 5; // La longueur souhaitée de l'ID
 const nanoid = customAlphabet(alphabet, length);
 
