@@ -46,7 +46,7 @@ const checkBlockedIP = async (req, res, next) => {
   next();
 };
 
-/*app.use(checkBlockedIP);*/
+app.use(checkBlockedIP);
 
 // Cette route gère les requêtes vers les URLs courtes et vérifie également les IPs bloquées
 app.get('/:id', async (req, res) => {
