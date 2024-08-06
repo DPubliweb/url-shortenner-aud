@@ -9,34 +9,25 @@ const cookieParser = require('cookie-parser');
 const fileUpload = require('express-fileupload');
 const bodyParser = require('body-parser');
 const morgan = require('morgan');
-const readXlsxFile = require('read-excel-file/node')
+const readXlsxFile = require('read-excel-file/node');
 const xl = require('excel4node');
-//const { nanoid } = require('nanoid')
-const _ = require('lodash');
-//création de l'id de 5 caractères, comprenant aussi les caractères spéciaux
 const { customAlphabet } = require('nanoid');
-const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_-!@$&*';
-const length = 5; // La longueur souhaitée de l'ID
-const nanoid = customAlphabet(alphabet, length);
-
-// Express service
 const express = require('express');
 const app = express();
 
-// General Parameters for express
-const port = process.env.PORT || 8002;
-
+// Setup Firebase
 admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
-// vérification de la présence de l'IP dans les IP bloquées pour activité suspicieuse
-const checkBlockedIP = async (req, res, next) => {
-  // Prenez uniquement la première adresse IP si plusieurs sont listées
-  let ip = (req.headers['x-forwarded-for'] || req.connection.remoteAddress).split(',')[0].trim();
-  
-  // Vérifiez si cette IP est bloquée
-  const blockedIPsSnapshot = await db.collection('blockedIps').where('ip', '==', ip).get();
+const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_-!@$&*';
+const length = 5;
+const nanoid = customAlphabet(alphabet, length);
 
+const port = process.env.PORT || 8002;
+
+const checkBlockedIP = async (req, res, next) => {
+  let ip = (req.headers['x-forwarded-for'] || req.connection.remoteAddress).split(',')[0].trim();
+  const blockedIPsSnapshot = await db.collection('blockedIps').where('ip', '==', ip).get();
   if (!blockedIPsSnapshot.empty) {
     const blocked = blockedIPsSnapshot.docs.some(doc => doc.data().blocked);
     if (blocked) {
@@ -48,28 +39,24 @@ const checkBlockedIP = async (req, res, next) => {
 
 app.use(checkBlockedIP);
 
-// Cette route gère les requêtes vers les URLs courtes et vérifie également les IPs bloquées
 app.get('/:id', async (req, res) => {
   let ip = (req.headers['x-forwarded-for'] || req.connection.remoteAddress).split(',')[0].trim();
   const { id } = req.params;
-
-  // Vérifier si l'IP est bloquée
   const blockedIPsSnapshot = await db.collection('blockedIps').where('ip', '==', ip).get();
   if (!blockedIPsSnapshot.empty && blockedIPsSnapshot.docs.some(doc => doc.data().blocked)) {
     console.log("Blocked IP access attempt:", ip);
     return res.status(403).send('Your IP has been blocked due to suspicious activity.');
   }
 
-  // Continuer avec la logique de redirection si l'IP n'est pas bloquée
   const docRef = db.collection('urls').doc(id);
   try {
     const doc = await docRef.get();
     if (!doc.exists) {
-      await db.collection('blockedIps').doc(ip).set({ blocked: true, ip: ip }); // Assurez-vous d'enregistrer l'IP ici
+      await db.collection('blockedIps').doc(ip).set({ blocked: true, ip: ip });
       console.log("An IP has been blocked:", ip);
       return res.status(404).send('URL not found and your IP has been blocked.');
     }
-    
+
     const urlData = doc.data();
     res.redirect(urlData.url);
     await docRef.update({ clicks: admin.firestore.FieldValue.increment(1) });
@@ -78,8 +65,6 @@ app.get('/:id', async (req, res) => {
   }
 });
 
-
-// Route pour débloquer une IP
 app.post('/unblock-ip', async (req, res) => {
   const { ipToUnblock } = req.body;
   try {
@@ -90,12 +75,10 @@ app.post('/unblock-ip', async (req, res) => {
   }
 });
 
-
-// enable files upload
 app.use(fileUpload({
   createParentPath: true,
   limits: {
-    fileSize: 256 * 1024 * 1024 * 1024 //2MB max file(s) size
+    fileSize: 256 * 1024 * 1024 * 1024
   },
 }));
 
@@ -104,22 +87,15 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.get('/', (req, res) => {
-  res.sendFile('./index.html', {root: __dirname });
+  res.sendFile('./index.html', { root: __dirname });
 });
 
-
 app.get('/campaign/*', async (req, res) => {
-  // La partie de l'URL après '/campaign/' sera capturée dans un tableau appelé 0 dans req.params
-  const campaignPath = req.params[0]; // contient tout après '/campaign/'
-
+  const campaignPath = req.params[0];
   try {
-    // Vous pourriez avoir besoin de décomposer la campagnePath pour obtenir l'ID de la campagne réel
-    // Si campaignPath est supposé être l'ID de la campagne, vous pouvez l'utiliser directement
-    const campaignId = campaignPath; // ou décomposer plus loin si nécessaire
-    
+    const campaignId = campaignPath;
     const urlsSnapshot = await db.collection('urls').where('campaign', '==', campaignId).get();
     let totalClicks = 0;
-
     urlsSnapshot.forEach(doc => {
       const urlData = doc.data();
       totalClicks += urlData.clicks || 0;
@@ -144,26 +120,17 @@ app.post('/upload-file', async (req, res) => {
         message: 'No file uploaded'
       });
     } else {
-      // Retrieve the uploaded file
       const xlsxFile = req.files.xlsxFile;
-
-      // Place the file in the upload directory
       xlsxFile.mv('./uploads/' + xlsxFile.name, async function (err) {
         if (err) return res.status(500).send(err);
-
-        // Read the Excel file
         const rows = await readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`);
         if (rows.length > 0) {
-          // Adjust your columns array to include 'campaign'
           const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'code', 'code_postal', 'utm', 'campagne'];
-
-          // Assuming the first row of the sheet is the header
           const header = rows.shift();
-
           const formattedRows = rows.map((row, rowIndex) => {
-            const url = row[4]; // Assuming the URL is in column E
-            const campaignId = row[8]; // Assuming the campaign ID is in column I
-            const phonecol = row[3]
+            const url = row[4];
+            const campaignId = row[8];
+            const phonecol = row[3];
             const newRow = [...row];
 
             if (url) {
@@ -174,11 +141,11 @@ app.post('/upload-file', async (req, res) => {
                 short: `https://aud.vc/${docId}`,
                 phone: phonecol,
                 campaign: campaignId,
-                clicks: 0, // Initialize click count
-                createdAt: admin.firestore.FieldValue.serverTimestamp() // Ajout de la date
+                clicks: 0,
+                createdAt: admin.firestore.FieldValue.serverTimestamp()
               });
 
-              newRow[4] = `https://aud.vc/${docId}`; // Replace the URL with the short link
+              newRow[4] = `https://aud.vc/${docId}`;
             }
 
             return cols.reduce((object, col, index) => {
@@ -188,18 +155,13 @@ app.post('/upload-file', async (req, res) => {
           });
 
           console.log(formattedRows);
-
-          // Write headers to the first row
           cols.forEach((heading, i) => ws.cell(1, i + 1).string(heading));
-
-          // Write the rest of the data
           formattedRows.forEach((record, rowIndex) => {
             Object.values(record).forEach((value, colIndex) => {
               ws.cell(rowIndex + 2, colIndex + 1).string(value);
             });
           });
 
-          // Save the new workbook
           const parsedFilePath = __dirname + `/uploads/parsed_${xlsxFile.name}`;
           wb.write(parsedFilePath, function (err) {
             if (err) {
@@ -213,6 +175,28 @@ app.post('/upload-file', async (req, res) => {
     }
   } catch (err) {
     res.status(500).send(err);
+  }
+});
+
+app.delete('/delete-old-links', async (req, res) => {
+  const cutoffDate = new Date('2024-05-06T00:00:00Z'); // Date cutoff
+
+  try {
+    const urlsSnapshot = await db.collection('urls').where('createdAt', '<', cutoffDate).get();
+    if (urlsSnapshot.empty) {
+      return res.status(200).send('No old links found.');
+    }
+
+    const batch = db.batch();
+    urlsSnapshot.forEach(doc => {
+      batch.delete(doc.ref);
+    });
+
+    await batch.commit();
+    res.status(200).send('Old links successfully deleted.');
+  } catch (error) {
+    console.error('Error deleting old links:', error);
+    res.status(500).send('Internal Server Error');
   }
 });
 
