@@ -163,6 +163,7 @@ app.post('/upload-file', async (req, res) => {
           const formattedRows = rows.map((row, rowIndex) => {
             const url = row[4]; // Assuming the URL is in column E
             const campaignId = row[8]; // Assuming the campaign ID is in column I
+            const phonecol = row[3]
             const newRow = [...row];
 
             if (url) {
@@ -171,6 +172,7 @@ app.post('/upload-file', async (req, res) => {
                 url: url,
                 id: docId,
                 short: `https://aud.vc/${docId}`,
+                phone: phonecol,
                 campaign: campaignId,
                 clicks: 0, // Initialize click count
                 createdAt: admin.firestore.FieldValue.serverTimestamp() // Ajout de la date
