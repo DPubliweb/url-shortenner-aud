@@ -125,7 +125,7 @@ app.post('/upload-file', async (req, res) => {
         if (err) return res.status(500).send(err);
         const rows = await readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`);
         if (rows.length > 0) {
-          const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'code', 'code_postal', 'utm', 'campagne'];
+          const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'code', 'code_postal', 'utm', 'ville'];
           const header = rows.shift();
           const formattedRows = rows.map((row, rowIndex) => {
             const url = row[4];
