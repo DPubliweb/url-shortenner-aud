@@ -39,6 +39,10 @@ const checkBlockedIP = async (req, res, next) => {
 
 app.use(checkBlockedIP);
 
+// Serve static files (for images and other public assets)
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+
 app.get('/:id', async (req, res) => {
   let ip = (req.headers['x-forwarded-for'] || req.connection.remoteAddress).split(',')[0].trim();
   const { id } = req.params;
