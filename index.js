@@ -40,7 +40,7 @@ const checkBlockedIP = async (req, res, next) => {
 app.use(checkBlockedIP);
 
 // Serve static files (for images and other public assets)
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/upload', express.static(path.join(__dirname, 'upload')));
 
 
 app.get('/:id', async (req, res) => {
