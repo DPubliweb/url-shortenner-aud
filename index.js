@@ -1,3 +1,5 @@
+// index.js
+
 const admin = require('firebase-admin');
 require('dotenv').config();
 const path = require('path');
@@ -13,31 +15,39 @@ const xl = require('excel4node');
 const { customAlphabet } = require('nanoid');
 const express = require('express');
 const app = express();
+const UAParser = require('ua-parser-js');
 
 const serviceAccount = {
   type: "service_account",
-  project_id: process.env.PROJECT_ID,
-  private_key_id: process.env.PRIVATE_KEY_ID,
-  private_key: process.env.PRIVATE_KEY
-      ? process.env.PRIVATE_KEY.replace(/\\n/g, '\n')
-      : null,
-  client_email: process.env.CLIENT_EMAIL,
-  client_id: process.env.CLIENT_ID,
-  auth_uri: process.env.AUTH_URI,
-  token_uri: process.env.TOKEN_URI,
-  auth_provider_x509_cert_url: process.env.AUTH_PROVIDER_X509_CERT_URL,
-  client_x509_cert_url: process.env.CLIENT_X509_CERT_URL,
+  project_id: process.env.FIREBASE_PROJECT_ID,
+  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+  private_key: process.env.FIREBASE_PRIVATE_KEY
+    ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+    : null,
+  client_email: process.env.FIREBASE_CLIENT_EMAIL,
+  client_id: process.env.FIREBASE_CLIENT_ID,
+  auth_uri: process.env.FIREBASE_AUTH_URI,
+  token_uri: process.env.FIREBASE_TOKEN_URI,
+  auth_provider_x509_cert_url: process.env.FIREBASE_AUTH_PROVIDER_X509_CERT_URL,
+  client_x509_cert_url: process.env.FIREBASE_CLIENT_X509_CERT_URL,
   universe_domain: "googleapis.com",
 };
 
-// Setup Firebase
+const shortUrlDomains = [
+  'https://aud.vc'
+];
+
+if (!serviceAccount.private_key) {
+  console.error('FIREBASE_PRIVATE_KEY is not defined. Check your .env file.');
+  process.exit(1);
+}
+
 admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
 const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const length = 5;
 const nanoid = customAlphabet(alphabet, length);
-
 const port = process.env.PORT || 8002;
 
 const checkBlockedIP = async (req, res, next) => {
@@ -57,6 +67,7 @@ app.use(checkBlockedIP);
 app.get('/:id', async (req, res) => {
   let ip = (req.headers['x-forwarded-for'] || req.connection.remoteAddress).split(',')[0].trim();
   const { id } = req.params;
+
   const blockedIPsSnapshot = await db.collection('blockedIps').where('ip', '==', ip).get();
   if (!blockedIPsSnapshot.empty && blockedIPsSnapshot.docs.some(doc => doc.data().blocked)) {
     console.log("Blocked IP access attempt:", ip);
@@ -64,6 +75,7 @@ app.get('/:id', async (req, res) => {
   }
 
   const docRef = db.collection('urls').doc(id);
+
   try {
     const doc = await docRef.get();
     if (!doc.exists) {
@@ -73,9 +85,22 @@ app.get('/:id', async (req, res) => {
     }
 
     const urlData = doc.data();
+
+    const parser = new UAParser(req.headers['user-agent']);
+    const deviceType = parser.getDevice().type || 'desktop';
+
+    const updates = {
+      clicks: admin.firestore.FieldValue.increment(1),
+    };
+    if (deviceType === 'mobile') {
+      updates.mobileClicks = admin.firestore.FieldValue.increment(1);
+    }
+
     res.redirect(urlData.url);
-    await docRef.update({ clicks: admin.firestore.FieldValue.increment(1) });
+    await docRef.update(updates);
+
   } catch (error) {
+    console.error('Redirection error:', error);
     return res.status(500).send('Internal Server Error');
   }
 });
@@ -92,9 +117,7 @@ app.post('/unblock-ip', async (req, res) => {
 
 app.use(fileUpload({
   createParentPath: true,
-  limits: {
-    fileSize: 256 * 1024 * 1024 * 1024
-  },
+  limits: { fileSize: 256 * 1024 * 1024 * 1024 },
 }));
 
 app.use(cors());
@@ -105,35 +128,45 @@ app.get('/', (req, res) => {
   res.sendFile('./index.html', { root: __dirname });
 });
 
-app.get('/campaign/*', async (req, res) => {
-  const campaignPath = req.params[0];
+app.get('/campaign/:campaignId/stats', async (req, res) => {
+  const { campaignId } = req.params;
+
   try {
-    const campaignId = campaignPath;
     const urlsSnapshot = await db.collection('urls').where('campaign', '==', campaignId).get();
+
     let totalClicks = 0;
+    let totalMobileClicks = 0;
+
     urlsSnapshot.forEach(doc => {
-      const urlData = doc.data();
-      totalClicks += urlData.clicks || 0;
+      const data = doc.data();
+      totalClicks += data.clicks || 0;
+      totalMobileClicks += data.mobileClicks || 0;
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       campaign: campaignId,
-      clicks: totalClicks
+      totalUrls: urlsSnapshot.size,
+      totalClicks,
+      mobileClicks: totalMobileClicks
     });
-  } catch (error) {
-    res.status(500).send('Internal Server Error');
+
+  } catch (err) {
+    console.error('Error fetching campaign stats:', err);
+    return res.status(500).send('Internal Server Error');
   }
 });
 
 app.post('/upload-file', async (req, res) => {
   const wb = new xl.Workbook();
   const ws = wb.addWorksheet('FileSheet');
+  const getRandomDomain = () => {
+    const randomIndex = Math.floor(Math.random() * shortUrlDomains.length);
+    return shortUrlDomains[randomIndex];
+  };
+
   try {
     if (!req.files) {
-      res.send({
-        status: false,
-        message: 'No file uploaded'
-      });
+      res.send({ status: false, message: 'No file uploaded' });
     } else {
       const xlsxFile = req.files.xlsxFile;
       xlsxFile.mv('./uploads/' + xlsxFile.name, async function (err) {
@@ -150,17 +183,18 @@ app.post('/upload-file', async (req, res) => {
 
             if (url) {
               const docId = nanoid();
+              const selectedDomain = getRandomDomain();
               db.collection('urls').doc(docId).set({
                 url: url,
                 id: docId,
-                short: `https://aud.vc/${docId}`,
+                short: `${selectedDomain}/${docId}`,
                 phone: phonecol,
                 campaign: campaignId,
                 clicks: 0,
+                mobileClicks: 0,
                 createdAt: admin.firestore.FieldValue.serverTimestamp()
               });
-
-              newRow[4] = `https://aud.vc/${docId}`;
+              newRow[4] = `${selectedDomain}/${docId}`;
             }
 
             return cols.reduce((object, col, index) => {
@@ -169,7 +203,6 @@ app.post('/upload-file', async (req, res) => {
             }, {});
           });
 
-          console.log(formattedRows);
           cols.forEach((heading, i) => ws.cell(1, i + 1).string(heading));
           formattedRows.forEach((record, rowIndex) => {
             Object.values(record).forEach((value, colIndex) => {
@@ -193,32 +226,6 @@ app.post('/upload-file', async (req, res) => {
   }
 });
 
-app.delete('/delete-old-links', async (req, res) => {
-  const cutoffDate = new Date('2024-05-06T00:00:00Z'); // Date cutoff
-
-  try {
-    const urlsSnapshot = await db.collection('urls').where('createdAt', '<', cutoffDate).get();
-    if (urlsSnapshot.empty) {
-      return res.status(200).send('No old links found.');
-    }
-
-    const batch = db.batch();
-    urlsSnapshot.forEach(doc => {
-      batch.delete(doc.ref);
-    });
-
-    await batch.commit();
-    res.status(200).send('Old links successfully deleted.');
-  } catch (error) {
-    console.error('Error deleting old links:', error);
-    res.status(500).send('Internal Server Error');
-  }
+app.listen(port, () => {
+  console.log(`URL Shortener backend is running on port ${port}`);
 });
-
-// Instantiate a new express based http server
-const server = http.createServer(app);
-server.listen(port, () => {
-  console.log('Server is up and running on port: ' + port);
-});
-
-module.exports = app;
