@@ -16,6 +16,8 @@ const { customAlphabet } = require('nanoid');
 const express = require('express');
 const app = express();
 const UAParser = require('ua-parser-js');
+const { AggregateField } = require('firebase-admin/firestore');
+
 
 const serviceAccount = {
   type: "service_account",
@@ -132,26 +134,26 @@ app.get('/campaign/:campaignId/stats', async (req, res) => {
   const { campaignId } = req.params;
 
   try {
-    const urlsSnapshot = await db.collection('urls').where('campaign', '==', campaignId).get();
+    const col = db.collection('urls').where('campaign', '==', campaignId);
 
-    let totalClicks = 0;
-    let totalMobileClicks = 0;
+    const snap = await col.aggregate({
+      totalUrls: AggregateField.count(),
+      totalClicks: AggregateField.sum('clicks'),
+      mobileClicks: AggregateField.sum('mobileClicks'),
+    }).get();
 
-    urlsSnapshot.forEach(doc => {
-      const data = doc.data();
-      totalClicks += data.clicks || 0;
-      totalMobileClicks += data.mobileClicks || 0;
-    });
+    // snap.data() retourne un objet avec tes agrégations
+    const { totalUrls = 0, totalClicks = 0, mobileClicks = 0 } = snap.data() || {};
 
     return res.status(200).json({
       campaign: campaignId,
-      totalUrls: urlsSnapshot.size,
+      totalUrls,
       totalClicks,
-      mobileClicks: totalMobileClicks
+      mobileClicks
     });
 
   } catch (err) {
-    console.error('Error fetching campaign stats:', err);
+    console.error('Aggregation error:', err);
     return res.status(500).send('Internal Server Error');
   }
 });
