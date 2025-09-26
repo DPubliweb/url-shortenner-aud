@@ -133,65 +133,18 @@ app.get('/', (req, res) => {
 
 app.get('/campaign/:campaignId/stats', async (req, res) => {
   const { campaignId } = req.params;
-
   try {
-    const col = db.collection('urls').where('campaign', '==', campaignId);
-
-    // Tentative 1 : agrégations (rapide si SDK ok et champs numériques)
-    const aggSnap = await col.aggregate({
+    const q = db.collection('urls').where('campaign', '==', campaignId);
+    const agg = await q.aggregate({
       totalUrls: AggregateField.count(),
       totalClicks: AggregateField.sum('clicks'),
       mobileClicks: AggregateField.sum('mobileClicks'),
     }).get();
-
-    const { totalUrls = 0, totalClicks = 0, mobileClicks = 0 } = aggSnap.data() || {};
-    return res.status(200).json({
-      campaign: campaignId,
-      totalUrls,
-      totalClicks,
-      mobileClicks
-    });
-
+    const { totalUrls = 0, totalClicks = 0, mobileClicks = 0 } = agg.data() || {};
+    res.json({ campaign: campaignId, totalUrls, totalClicks, mobileClicks });
   } catch (err) {
-    console.error('Aggregation error:', {
-      message: err?.message,
-      code: err?.code,
-      stack: err?.stack
-    });
-
-    // Tentative 2 (fallback) : SELECT partiel + somme locale avec garde-fou
-    try {
-      const LIMIT = 5000; // évite de tout charger (et donc le 524)
-      const snap = await db.collection('urls')
-        .where('campaign', '==', campaignId)
-        .select('clicks', 'mobileClicks') // on ne rapatrie que le nécessaire
-        .limit(LIMIT)
-        .get();
-
-      let totalClicks = 0;
-      let mobileClicks = 0;
-
-      snap.forEach(doc => {
-        const d = doc.data() || {};
-        totalClicks += Number(d.clicks) || 0;
-        mobileClicks += Number(d.mobileClicks) || 0;
-      });
-
-      return res.status(200).json({
-        campaign: campaignId,
-        totalUrls: snap.size, // partiel si LIMIT atteint
-        totalClicks,
-        mobileClicks,
-        note: snap.size === LIMIT ? 'Partial (LIMIT reached)' : 'OK'
-      });
-    } catch (fallbackErr) {
-      console.error('Fallback sum error:', {
-        message: fallbackErr?.message,
-        code: fallbackErr?.code,
-        stack: fallbackErr?.stack
-      });
-      return res.status(500).send('Internal Server Error');
-    }
+    console.error('Aggregation error:', { message: err?.message, code: err?.code });
+    res.status(500).send('Internal Server Error');
   }
 });
 
