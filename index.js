@@ -16,7 +16,6 @@ const { customAlphabet } = require('nanoid');
 const express = require('express');
 const app = express();
 const UAParser = require('ua-parser-js');
-const { AggregateField } = require('firebase-admin/firestore');
 
 
 const serviceAccount = {
@@ -46,6 +45,8 @@ if (!serviceAccount.private_key) {
 
 admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
+const { AggregateField } = require('firebase-admin/firestore'); // <- important
+
 
 const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const length = 5;
@@ -136,15 +137,14 @@ app.get('/campaign/:campaignId/stats', async (req, res) => {
   try {
     const col = db.collection('urls').where('campaign', '==', campaignId);
 
-    const snap = await col.aggregate({
+    // Tentative 1 : agrégations (rapide si SDK ok et champs numériques)
+    const aggSnap = await col.aggregate({
       totalUrls: AggregateField.count(),
       totalClicks: AggregateField.sum('clicks'),
       mobileClicks: AggregateField.sum('mobileClicks'),
     }).get();
 
-    // snap.data() retourne un objet avec tes agrégations
-    const { totalUrls = 0, totalClicks = 0, mobileClicks = 0 } = snap.data() || {};
-
+    const { totalUrls = 0, totalClicks = 0, mobileClicks = 0 } = aggSnap.data() || {};
     return res.status(200).json({
       campaign: campaignId,
       totalUrls,
@@ -153,8 +153,45 @@ app.get('/campaign/:campaignId/stats', async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Aggregation error:', err);
-    return res.status(500).send('Internal Server Error');
+    console.error('Aggregation error:', {
+      message: err?.message,
+      code: err?.code,
+      stack: err?.stack
+    });
+
+    // Tentative 2 (fallback) : SELECT partiel + somme locale avec garde-fou
+    try {
+      const LIMIT = 5000; // évite de tout charger (et donc le 524)
+      const snap = await db.collection('urls')
+        .where('campaign', '==', campaignId)
+        .select('clicks', 'mobileClicks') // on ne rapatrie que le nécessaire
+        .limit(LIMIT)
+        .get();
+
+      let totalClicks = 0;
+      let mobileClicks = 0;
+
+      snap.forEach(doc => {
+        const d = doc.data() || {};
+        totalClicks += Number(d.clicks) || 0;
+        mobileClicks += Number(d.mobileClicks) || 0;
+      });
+
+      return res.status(200).json({
+        campaign: campaignId,
+        totalUrls: snap.size, // partiel si LIMIT atteint
+        totalClicks,
+        mobileClicks,
+        note: snap.size === LIMIT ? 'Partial (LIMIT reached)' : 'OK'
+      });
+    } catch (fallbackErr) {
+      console.error('Fallback sum error:', {
+        message: fallbackErr?.message,
+        code: fallbackErr?.code,
+        stack: fallbackErr?.stack
+      });
+      return res.status(500).send('Internal Server Error');
+    }
   }
 });
 
