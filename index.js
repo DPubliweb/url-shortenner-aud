@@ -34,7 +34,7 @@ const serviceAccount = {
 };
 
 const shortUrlDomains = [
-  'https://aud.bz'
+  'https://aud.vc'
 ];
 
 if (!serviceAccount.private_key) {
