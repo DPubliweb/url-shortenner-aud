@@ -1,12 +1,15 @@
-// index.js (AUD.VC - updated like your metadata version)
+// index.js
 
 const admin = require('firebase-admin');
 require('dotenv').config();
-
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const fileUpload = require('express-fileupload');
+const bodyParser = require('body-parser');
+const morgan = require('morgan');
 const readXlsxFile = require('read-excel-file/node');
 const xl = require('excel4node');
 const { customAlphabet } = require('nanoid');
@@ -14,9 +17,7 @@ const express = require('express');
 const UAParser = require('ua-parser-js');
 
 const app = express();
-const port = process.env.PORT || 8002;
 
-// ----------------------------- FIREBASE -----------------------------
 const serviceAccount = {
   type: "service_account",
   project_id: process.env.FIREBASE_PROJECT_ID,
@@ -33,78 +34,57 @@ const serviceAccount = {
   universe_domain: "googleapis.com",
 };
 
+const shortUrlDomains = ['https://aud.vc'];
+
 if (!serviceAccount.private_key) {
-  console.error('❌ FIREBASE_PRIVATE_KEY is not defined. Check your .env file.');
+  console.error('FIREBASE_PRIVATE_KEY is not defined. Check your .env file.');
   process.exit(1);
 }
 
 admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
-// ----------------------------- APP CONFIG -----------------------------
+const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+const length = 5;
+const nanoid = customAlphabet(alphabet, length);
+const port = process.env.PORT || 8002;
+
+// -------------------- MIDDLEWARES (inchangés) --------------------
+app.use(cookieParser());
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use(fileUpload({
   createParentPath: true,
-  // mets la limite que tu veux (ancien code = énorme). Ici 512MB.
-  limits: { fileSize: 512 * 1024 * 1024 },
+  limits: { fileSize: 256 * 1024 * 1024 * 1024 },
 }));
 
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
+// -------------------- NOUVELLE LOGIQUE IP THROTTLE --------------------
+// 3 IDs inexistants en 5 minutes => blocage définitif
+const IP_FAIL_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+const IP_FAIL_THRESHOLD = 3;             // 3 essais => block définitif
 
-const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-const nanoid = customAlphabet(alphabet, 5);
-
-// ----------------------------- JOB STATUS STORE -----------------------------
-const jobs = {}; // suivi en mémoire: { [jobId]: {status, filePath, message?} }
-
-// ----------------------------- HELPERS -----------------------------
-function normalizeDomains(raw) {
-  if (!raw) return null;
-  const arr = String(raw)
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean)
-    .map(s => (s.startsWith('http://') || s.startsWith('https://')) ? s : `https://${s}`);
-  return arr.length ? arr : null;
-}
-
-// Header prioritaire
-function parseDomainsFromHeader(req) {
-  return normalizeDomains(req.header('X-Short-Domains'));
-}
-
-// Fallback query: ?domains=aud.vc,xxx.com
-function parseDomainsFromQuery(req) {
-  return normalizeDomains(req.query.domains || req.query.domain || req.query.short_domains);
-}
-
-// ✅ Domaine par défaut si rien fourni
-function getShortDomains(req) {
-  return parseDomainsFromHeader(req) || parseDomainsFromQuery(req) || ['https://aud.vc'];
-}
-
-function getRandomDomain(domains) {
-  return domains[Math.floor(Math.random() * domains.length)];
-}
+function nowMs() { return Date.now(); }
 
 function getClientIp(req) {
   const raw = (req.headers['x-forwarded-for'] || req.connection.remoteAddress || '').toString();
-  // x-forwarded-for peut contenir "ip1, ip2"
-  const ip = raw.split(',')[0].trim();
-  // retire port éventuel (ex: ::ffff:127.0.0.1:1234)
-  return ip.replace(/:\d+$/, '');
+  return raw.split(',')[0].trim().replace(/:\d+$/, '');
 }
 
+// Pour éviter les faux positifs (favicon.ico, robots.txt, "campaign", etc.)
+// On ne compte que si l'id ressemble à un vrai short id (5 alphanum)
+function shouldCountNotFound(id) {
+  return /^[0-9A-Za-z]{5}$/.test(id);
+}
+
+// Compatible legacy: certains docs blockedIps peuvent être trouvés via where('ip'=='...')
 async function isIpBlocked(ip) {
-  // 1) docId = ip (nouvelle logique)
+  // 1) docId = ip (recommandé)
   const direct = await db.collection('blockedIps').doc(ip).get();
   if (direct.exists && direct.data()?.blocked) return true;
 
-  // 2) fallback compat ancien: documents dont champ ip == ip
+  // 2) fallback legacy
   const snap = await db.collection('blockedIps').where('ip', '==', ip).limit(5).get();
   if (!snap.empty) {
     return snap.docs.some(d => d.data()?.blocked);
@@ -112,21 +92,54 @@ async function isIpBlocked(ip) {
   return false;
 }
 
-async function blockIp(ip, reason = 'suspicious') {
-  try {
-    await db.collection('blockedIps').doc(ip).set({
+async function recordNotFoundAndMaybeBlock(ip) {
+  const ref = db.collection('blockedIps').doc(ip);
+
+  return await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const n = nowMs();
+
+    const data = snap.exists ? (snap.data() || {}) : {};
+
+    // déjà bloqué => on garde
+    if (data.blocked) {
+      return { blockedNow: true, failCount: data.failCount || 0 };
+    }
+
+    const firstFailAtMs = data.firstFailAt?.toMillis?.() ?? 0;
+    let failCount = data.failCount || 0;
+
+    // fenêtre expirée => reset
+    let firstFailAt = data.firstFailAt;
+    if (!firstFailAtMs || (n - firstFailAtMs) > IP_FAIL_WINDOW_MS) {
+      failCount = 0;
+      firstFailAt = admin.firestore.Timestamp.fromMillis(n);
+    }
+
+    failCount += 1;
+
+    const updates = {
       ip,
-      blocked: true,
-      reason,
-      blockedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-  } catch (e) {
-    console.error('⚠️ Failed to block IP:', ip, e.message);
-  }
+      failCount,
+      firstFailAt,
+      lastFailAt: admin.firestore.Timestamp.fromMillis(n),
+      blocked: false,
+      reason: 'not_found_threshold',
+      blockedAt: admin.firestore.FieldValue.delete(),
+    };
+
+    if (failCount >= IP_FAIL_THRESHOLD) {
+      updates.blocked = true; // ✅ blocage définitif
+      updates.blockedAt = admin.firestore.Timestamp.fromMillis(n);
+    }
+
+    tx.set(ref, updates, { merge: true });
+    return { blockedNow: updates.blocked, failCount };
+  });
 }
 
-// ----------------------------- IP BLOCK MIDDLEWARE -----------------------------
-app.use(async (req, res, next) => {
+// Middleware global de blocage (inchangé côté comportement, mais logique améliorée)
+const checkBlockedIP = async (req, res, next) => {
   try {
     const ip = getClientIp(req);
     if (await isIpBlocked(ip)) {
@@ -134,319 +147,184 @@ app.use(async (req, res, next) => {
     }
     next();
   } catch (e) {
-    console.error('IP check error:', e.message);
-    next(); // on laisse passer si erreur lecture
+    console.error('checkBlockedIP error:', e.message);
+    next();
   }
-});
+};
 
-// ----------------------------- HOME -----------------------------
+app.use(checkBlockedIP);
+
+// -------------------- ROUTES (ordre corrigé) --------------------
+
+// Home
 app.get('/', (req, res) => {
-  res.send('AUD.VC shortener is running ✅');
+  res.sendFile('./index.html', { root: __dirname });
 });
 
-// ----------------------------- UNBLOCK IP -----------------------------
-app.post('/unblock-ip', async (req, res) => {
-  const { ipToUnblock } = req.body || {};
-  if (!ipToUnblock) return res.status(400).json({ error: 'ipToUnblock is required' });
-
-  try {
-    // suppression docId = ip
-    await db.collection('blockedIps').doc(ipToUnblock).delete();
-
-    // suppression fallback (si anciens docs existaient)
-    const snap = await db.collection('blockedIps').where('ip', '==', ipToUnblock).get();
-    const batch = db.batch();
-    snap.forEach(d => batch.delete(d.ref));
-    if (!snap.empty) await batch.commit();
-
-    res.json({ ok: true, message: 'IP has been successfully unblocked.' });
-  } catch (error) {
-    console.error('Unblock error:', error.message);
-    res.status(500).send('Internal Server Error');
-  }
-});
-
-// ----------------------------- JOB STATUS -----------------------------
-app.get('/jobs/:jobId', (req, res) => {
-  const job = jobs[req.params.jobId];
-  if (!job) return res.status(404).json({ status: 'not_found' });
-  res.json(job);
-});
-
-// ----------------------------- DOWNLOAD -----------------------------
-app.get('/download/:jobId', (req, res) => {
-  const job = jobs[req.params.jobId];
-  if (!job || job.status !== 'done' || !job.filePath) {
-    return res.status(404).send('File not ready or not found');
-  }
-  res.download(job.filePath);
-});
-
-// ----------------------------- STATS PAR CAMPAGNE -----------------------------
+// Stats campagne
 app.get('/campaign/:campaignId/stats', async (req, res) => {
   const { campaignId } = req.params;
 
   try {
-    const snapshot = await db.collection('urls').where('campaign', '==', campaignId).get();
+    const urlsSnapshot = await db.collection('urls').where('campaign', '==', campaignId).get();
 
     let totalClicks = 0;
     let totalMobileClicks = 0;
 
-    snapshot.forEach(doc => {
+    urlsSnapshot.forEach(doc => {
       const data = doc.data();
       totalClicks += data.clicks || 0;
       totalMobileClicks += data.mobileClicks || 0;
     });
 
-    res.json({
+    return res.status(200).json({
       campaign: campaignId,
-      totalUrls: snapshot.size,
+      totalUrls: urlsSnapshot.size,
       totalClicks,
       mobileClicks: totalMobileClicks
     });
+
   } catch (err) {
-    console.error('Error fetching campaign stats:', err.message);
-    res.status(500).send('Internal Server Error');
+    console.error('Error fetching campaign stats:', err);
+    return res.status(500).send('Internal Server Error');
   }
 });
 
-// (Optionnel mais utile) stats globales
-app.get('/stats/global', async (req, res) => {
-  try {
-    const snapshot = await db.collection('urls').get();
-
-    let totalClicks = 0;
-    let totalMobileClicks = 0;
-    const campaignStats = {};
-
-    snapshot.forEach(doc => {
-      const d = doc.data();
-      totalClicks += d.clicks || 0;
-      totalMobileClicks += d.mobileClicks || 0;
-
-      const c = d.campaign || 'unknown';
-      if (!campaignStats[c]) campaignStats[c] = { count: 0, clicks: 0, mobileClicks: 0 };
-      campaignStats[c].count++;
-      campaignStats[c].clicks += d.clicks || 0;
-      campaignStats[c].mobileClicks += d.mobileClicks || 0;
-    });
-
-    res.json({
-      totalUrls: snapshot.size,
-      totalClicks,
-      mobileClicks: totalMobileClicks,
-      campaigns: campaignStats
-    });
-  } catch (e) {
-    console.error('Global stats error:', e.message);
-    res.status(500).send('Internal Server Error');
-  }
-});
-
-// ----------------------------- UPLOAD FILE (ASYNC) -----------------------------
+// Upload fichier (inchangé)
 app.post('/upload-file', async (req, res) => {
-  try {
-    if (!req.files || !req.files.xlsxFile) {
-      return res.status(400).json({ error: 'No file uploaded (xlsxFile)' });
-    }
-
-    const xlsxFile = req.files.xlsxFile;
-    const uploadPath = path.join(uploadsDir, xlsxFile.name);
-    await xlsxFile.mv(uploadPath);
-
-    const jobId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    jobs[jobId] = { status: 'processing', filePath: null };
-
-    // ✅ Réponse immédiate
-    res.status(202).json({ status: 'received', jobId });
-
-    // 🚀 Traitement async
-    const domains = getShortDomains(req); // si rien fourni => ['https://aud.vc']
-    processFileAsync(uploadPath, jobId, domains);
-
-  } catch (e) {
-    console.error('Upload error:', e.message);
-    res.status(500).send('Internal Server Error');
-  }
-});
-
-async function processFileAsync(uploadPath, jobId, shortUrlDomains) {
-  console.log(`🚀 Job ${jobId} started: ${uploadPath}`);
-
   const wb = new xl.Workbook();
   const ws = wb.addWorksheet('FileSheet');
 
+  const getRandomDomain = () => {
+    const randomIndex = Math.floor(Math.random() * shortUrlDomains.length);
+    return shortUrlDomains[randomIndex];
+  };
+
   try {
-    const rows = await readXlsxFile(uploadPath);
-    if (!rows || rows.length === 0) {
-      jobs[jobId] = { status: 'error', message: 'Empty file' };
-      return;
-    }
+    if (!req.files) {
+      return res.send({ status: false, message: 'No file uploaded' });
+    } else {
+      const xlsxFile = req.files.xlsxFile;
+      xlsxFile.mv('./uploads/' + xlsxFile.name, async function (err) {
+        if (err) return res.status(500).send(err);
+        const rows = await readXlsxFile(__dirname + `/uploads/${xlsxFile.name}`);
+        if (rows.length > 0) {
+          const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'code', 'code_postal', 'utm', 'ville'];
+          rows.shift(); // header
 
-    // Colonnes "compat" avec ton ancien code
-    const cols = ['nom', 'prenom', 'mail', 'phone', 'lien', 'civilite', 'code', 'code_postal', 'utm', 'ville'];
+          const formattedRows = rows.map((row) => {
+            const url = row[4];
+            const campaignId = row[8];
+            const phonecol = row[3];
+            const newRow = [...row];
 
-    // retire header
-    rows.shift();
+            if (url) {
+              const docId = nanoid();
+              const selectedDomain = getRandomDomain();
+              db.collection('urls').doc(docId).set({
+                url: url,
+                id: docId,
+                short: `${selectedDomain}/${docId}`,
+                phone: phonecol,
+                campaign: campaignId,
+                clicks: 0,
+                mobileClicks: 0,
+                createdAt: admin.firestore.FieldValue.serverTimestamp()
+              });
+              newRow[4] = `${selectedDomain}/${docId}`;
+            }
 
-    const formattedRows = [];
+            return cols.reduce((object, col, index) => {
+              object[col] = newRow[index] || '';
+              return object;
+            }, {});
+          });
 
-    // Batch Firestore (500 ops max)
-    let batch = db.batch();
-    let batchCount = 0;
-    let totalWritten = 0;
+          cols.forEach((heading, i) => ws.cell(1, i + 1).string(heading));
+          formattedRows.forEach((record, rowIndex) => {
+            Object.values(record).forEach((value, colIndex) => {
+              ws.cell(rowIndex + 2, colIndex + 1).string(value);
+            });
+          });
 
-    for (const row of rows) {
-      const url = row[4];       // destination
-      const campaignId = row[8];
-      const phone = row[3];
-      const newRow = [...row];
-
-      if (url && String(url).startsWith('http')) {
-        const id = nanoid();
-        const selectedDomain = getRandomDomain(shortUrlDomains || ['https://aud.vc']);
-        const domainOnly = selectedDomain.replace(/^https?:\/\//, '');
-
-        const docRef = db.collection('urls').doc(id);
-
-        batch.set(docRef, {
-          id,
-          url,
-          short: `${selectedDomain}/${id}`,
-          domain: domainOnly,
-          phone,
-          campaign: campaignId || '',
-          clicks: 0,
-          mobileClicks: 0,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
-        batchCount++;
-        totalWritten++;
-
-        if (batchCount >= 500) {
-          await batch.commit();
-          console.log(`✅ Batch committed (500). Total docs: ${totalWritten}`);
-          batch = db.batch();
-          batchCount = 0;
+          const parsedFilePath = __dirname + `/uploads/parsed_${xlsxFile.name}`;
+          wb.write(parsedFilePath, function (err) {
+            if (err) {
+              console.error(err);
+              return res.status(500).send(err);
+            }
+            res.download(parsedFilePath, `parsed_${xlsxFile.name}`);
+          });
         }
-
-        // remplace la colonne lien par le short
-        newRow[4] = `${selectedDomain}/${id}`;
-      } else {
-        // si pas d'URL destination, on laisse la cellule telle quelle
-        // (ou vide) et on ne crée pas de shortlink
-      }
-
-      const obj = cols.reduce((acc, col, i) => {
-        acc[col] = newRow[i] || '';
-        return acc;
-      }, {});
-      formattedRows.push(obj);
+      });
     }
-
-    if (batchCount > 0) {
-      await batch.commit();
-      console.log(`✅ Final batch committed (${batchCount}). Total docs: ${totalWritten}`);
-    }
-
-    // écrit xlsx de sortie
-    cols.forEach((h, i) => ws.cell(1, i + 1).string(h));
-    formattedRows.forEach((rec, r) => {
-      Object.values(rec).forEach((v, c) => ws.cell(r + 2, c + 1).string(String(v ?? '')));
-    });
-
-    const parsedPath = path.join(uploadsDir, `parsed_${path.basename(uploadPath)}`);
-
-    wb.write(parsedPath, (err) => {
-      if (err) {
-        jobs[jobId] = { status: 'error', message: err.message };
-        console.error('XLSX write error:', err.message);
-      } else {
-        jobs[jobId] = { status: 'done', filePath: parsedPath };
-        console.log(`✅ Job ${jobId} done: ${parsedPath}`);
-      }
-    });
-
-  } catch (e) {
-    console.error(`❌ Job ${jobId} error:`, e.message);
-    jobs[jobId] = { status: 'error', message: e.message };
+  } catch (err) {
+    res.status(500).send(err);
   }
-}
+});
 
-// ----------------------------- REDIRECTION + METADATA (CATCH-ALL) -----------------------------
-// IMPORTANT: doit rester TOUT EN BAS après toutes les routes API
-app.get('*', async (req, res) => {
-  const pathPart = req.path.replace(/^\/+/, '').trim();
-  const id = pathPart.split('/')[0]; // on prend juste le 1er segment
-  if (!id || id.length < 3) return res.status(404).send('Invalid short link');
-
-  const ip = getClientIp(req);
-
+// Route existante /unblock-ip (je la laisse inchangée puisque tu n’as pas demandé de la retirer ici)
+app.post('/unblock-ip', async (req, res) => {
+  const { ipToUnblock } = req.body;
   try {
-    const docRef = db.collection('urls').doc(id);
-    const doc = await docRef.get();
-
-    // si le doc n'existe pas => blocage IP (comme ton ancien comportement)
-    if (!doc.exists) {
-      await blockIp(ip, 'short_not_found');
-      console.log("🚫 Blocked IP (short not found):", ip, "for id:", id);
-      return res.status(404).send('URL not found and your IP has been blocked.');
-    }
-
-    const data = doc.data();
-    if (!data?.url || !String(data.url).startsWith('http')) {
-      return res.status(400).send('Invalid destination URL.');
-    }
-
-    // ✅ redirect immédiat
-    res.redirect(302, data.url);
-
-    // ✅ update async métadonnées (après redirect)
-    (async () => {
-      try {
-        const parser = new UAParser(req.headers['user-agent']);
-        const device = parser.getDevice();
-        const os = parser.getOS();
-        const browser = parser.getBrowser();
-
-        const referer = req.get('referer') || '';
-        const userAgent = req.headers['user-agent'] || '';
-
-        const metadata = {
-          lastClickAt: admin.firestore.FieldValue.serverTimestamp(),
-          lastClickIP: ip,
-          referer,
-          userAgent,
-          deviceType: device.type || 'desktop',
-          deviceVendor: device.vendor || '',
-          deviceModel: device.model || '',
-          osName: os.name || '',
-          osVersion: os.version || '',
-          browserName: browser.name || '',
-          browserVersion: browser.version || '',
-          clicks: admin.firestore.FieldValue.increment(1)
-        };
-
-        if (device.type === 'mobile') {
-          metadata.mobileClicks = admin.firestore.FieldValue.increment(1);
-        }
-
-        await docRef.update(metadata);
-
-        console.log(`📊 Click ${id} — ${metadata.deviceType} | ${metadata.osName} | ${metadata.browserName} | referer="${referer}"`);
-      } catch (e) {
-        console.error('⚠️ Metadata update error:', e.message);
-      }
-    })();
-
-  } catch (e) {
-    console.error('Redirection error:', e.message);
+    await db.collection('blockedIps').doc(ipToUnblock).delete();
+    res.send('IP has been successfully unblocked.');
+  } catch (error) {
     res.status(500).send('Internal Server Error');
   }
 });
 
-// ----------------------------- START -----------------------------
+// -------------------- REDIRECTION (avec nouvelle règle not-found) --------------------
+app.get('/:id', async (req, res) => {
+  const ip = getClientIp(req);
+  const { id } = req.params;
+
+  // (ta vérif "blocked" était doublonnée, mais checkBlockedIP middleware le fait déjà)
+  const docRef = db.collection('urls').doc(id);
+
+  try {
+    const doc = await docRef.get();
+
+    // ✅ CHANGEMENT: si l'ID n'existe pas => on compte et bloque seulement après seuil
+    if (!doc.exists) {
+      if (shouldCountNotFound(id)) {
+        const r = await recordNotFoundAndMaybeBlock(ip);
+
+        if (r.blockedNow) {
+          console.log("🚫 IP blocked permanently:", ip, "failCount:", r.failCount);
+          return res.status(403).send('Too many invalid short links. Your IP has been blocked.');
+        }
+
+        console.log("⚠️ Short not found:", id, "ip:", ip, "failCount:", r.failCount);
+      } else {
+        console.log("⚠️ Not found (ignored for throttle):", id, "ip:", ip);
+      }
+
+      return res.status(404).send('URL not found.');
+    }
+
+    const urlData = doc.data();
+
+    const parser = new UAParser(req.headers['user-agent']);
+    const deviceType = parser.getDevice().type || 'desktop';
+
+    // ✅ Ici on garde TA logique: tu différencies déjà mobile/desktop
+    const updates = {
+      clicks: admin.firestore.FieldValue.increment(1),
+    };
+    if (deviceType === 'mobile') {
+      updates.mobileClicks = admin.firestore.FieldValue.increment(1);
+    }
+
+    res.redirect(urlData.url);
+    await docRef.update(updates);
+
+  } catch (error) {
+    console.error('Redirection error:', error);
+    return res.status(500).send('Internal Server Error');
+  }
+});
+
 app.listen(port, () => {
-  console.log(`🚀 AUD.VC shortener running on port ${port}`);
+  console.log(`URL Shortener backend is running on port ${port}`);
 });
