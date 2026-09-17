@@ -15,6 +15,7 @@ const xl = require('excel4node');
 const { customAlphabet } = require('nanoid');
 const express = require('express');
 const UAParser = require('ua-parser-js');
+const { isIP } = require('net');
 
 const app = express();
 
@@ -67,9 +68,20 @@ const IP_FAIL_THRESHOLD = 3;             // 3 essais => block définitif
 
 function nowMs() { return Date.now(); }
 
+function normalizeIp(value) {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  // Tester l'adresse complète avant de retirer un port : ::1 est une IPv6 valide.
+  if (isIP(raw)) return raw;
+
+  const withPort = raw.match(/^\[([^\]]+)\](?::\d+)?$/)
+    || raw.match(/^((?:::ffff:)?(?:\d{1,3}\.){3}\d{1,3}):\d+$/);
+  return withPort && isIP(withPort[1]) ? withPort[1] : '';
+}
+
 function getClientIp(req) {
-  const raw = (req.headers['x-forwarded-for'] || req.connection.remoteAddress || '').toString();
-  return raw.split(',')[0].trim().replace(/:\d+$/, '');
+  const forwarded = (req.headers['x-forwarded-for'] || '').toString().split(',')[0];
+  return normalizeIp(forwarded)
+    || normalizeIp(req.socket?.remoteAddress || req.connection?.remoteAddress);
 }
 
 // Pour éviter les faux positifs (favicon.ico, robots.txt, "campaign", etc.)
@@ -80,6 +92,7 @@ function shouldCountNotFound(id) {
 
 // Compatible legacy: certains docs blockedIps peuvent être trouvés via where('ip'=='...')
 async function isIpBlocked(ip) {
+  if (!ip) return false;
   // 1) docId = ip (recommandé)
   const direct = await db.collection('blockedIps').doc(ip).get();
   if (direct.exists && direct.data()?.blocked) return true;
@@ -287,7 +300,7 @@ app.get('/:id', async (req, res) => {
 
     // ✅ CHANGEMENT: si l'ID n'existe pas => on compte et bloque seulement après seuil
     if (!doc.exists) {
-      if (shouldCountNotFound(id)) {
+      if (ip && shouldCountNotFound(id)) {
         const r = await recordNotFoundAndMaybeBlock(ip);
 
         if (r.blockedNow) {
@@ -305,19 +318,44 @@ app.get('/:id', async (req, res) => {
 
     const urlData = doc.data();
 
-    const parser = new UAParser(req.headers['user-agent']);
-    const deviceType = parser.getDevice().type || 'desktop';
+    try {
+      const userAgent = req.headers['user-agent'] || '';
+      const parser = new UAParser(userAgent);
+      const device = parser.getDevice();
+      const os = parser.getOS();
+      const browser = parser.getBrowser();
 
-    // ✅ Ici on garde TA logique: tu différencies déjà mobile/desktop
-    const updates = {
-      clicks: admin.firestore.FieldValue.increment(1),
-    };
-    if (deviceType === 'mobile') {
-      updates.mobileClicks = admin.firestore.FieldValue.increment(1);
+      // Garder les noms historiques des champs sur urls/{id}.
+      // Une seule écriture met à jour les compteurs et le dernier clic ensemble.
+      const updates = {
+        lastClickAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastClickIP: ip,
+        referer: req.get('referer') || '',
+        userAgent,
+        deviceType: device.type || 'desktop',
+        deviceVendor: device.vendor || '',
+        deviceModel: device.model || '',
+        osName: os.name || '',
+        osVersion: os.version || '',
+        browserName: browser.name || '',
+        browserVersion: browser.version || '',
+        clicks: admin.firestore.FieldValue.increment(1),
+      };
+      if (device.type === 'mobile') {
+        updates.mobileClicks = admin.firestore.FieldValue.increment(1);
+      }
+
+      // Terminer l'écriture avant la réponse, y compris sur un hébergement
+      // qui suspend le traitement dès que la redirection a été envoyée.
+      await docRef.update(updates);
+    } catch (error) {
+      // Une panne de statistiques ne doit pas empêcher d'ouvrir la destination.
+      console.error(`Metadata update error for short link ${id}:`, error.message);
     }
 
-    res.redirect(urlData.url);
-    await docRef.update(updates);
+    // Un cache de redirection empêcherait les prochains clics d'atteindre l'app.
+    res.set('Cache-Control', 'no-store');
+    return res.redirect(302, urlData.url);
 
   } catch (error) {
     console.error('Redirection error:', error);
